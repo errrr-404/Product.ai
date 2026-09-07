@@ -1,0 +1,58 @@
+name: test
+
+# The 8.0 job is the point of this matrix. PHPCompatibility's latest stable
+# predates PHP 8 and cannot flag an 8.1+ call in a codebase declaring 8.0
+# support, so actually running on 8.0 is the only thing enforcing the floor.
+# 8.4 catches deprecations coming the other way.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: [ '8.0', '8.1', '8.4' ]
+
+    name: PHP ${{ matrix.php }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # The suites are deliberately free of WordPress, so they need no
+          # extension beyond what ships by default. mbstring is listed because
+          # its absence is the kind of thing that should fail loudly here rather
+          # than on someone's shared host.
+          extensions: mbstring
+          coverage: none
+
+      # The suites load their own classes and need no autoloader, so dev
+      # dependencies are not installed: this job tests the plugin, not the
+      # toolchain. Linting runs separately.
+      - name: Run test suites
+        run: composer test
+
+  lint:
+    runs-on: ubuntu-latest
+    name: PHPCS
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+
+      - name: Run PHPCS
+        run: composer lint
