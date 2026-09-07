@@ -33,8 +33,15 @@ define( 'BLI_URL', plugin_dir_url( __FILE__ ) );
  *
  * PHP note: spl_autoload_register hands PHP a fallback to run the first time a
  * class name is used that isn't loaded yet. There is no classpath like in Java —
- * this callback maps the fully-qualified name to a file by convention:
- *   BulkListImport\SKU_Generator  ->  includes/class-sku-generator.php
+ * this callback maps the fully-qualified name to a file by convention.
+ *
+ * Sub-namespace segments become directories, and the leaf follows the WPCS file
+ * naming rules, so a new directory needs no registration:
+ *
+ *   BulkListImport\SKU_Generator        -> includes/class-sku-generator.php
+ *   BulkListImport\AI\Gemini_Provider   -> includes/ai/class-gemini-provider.php
+ *   BulkListImport\AI\Description_Provider
+ *                                       -> includes/ai/interface-description-provider.php
  */
 spl_autoload_register(
 	static function ( string $class_name ): void {
@@ -43,11 +50,33 @@ spl_autoload_register(
 		}
 
 		$relative = substr( $class_name, strlen( 'BulkListImport\\' ) );
-		$file     = 'class-' . strtolower( str_replace( '_', '-', $relative ) ) . '.php';
-		$path     = BLI_PATH . 'includes/' . $file;
+		$segments = explode( '\\', $relative );
+		$leaf     = array_pop( $segments );
 
-		if ( is_readable( $path ) ) {
-			require_once $path;
+		// PHP class names cannot contain a separator or a dot, so traversal is not
+		// reachable here. Rejecting anything unexpected is still cheaper than
+		// reasoning about it again later.
+		foreach ( array_merge( $segments, array( $leaf ) ) as $segment ) {
+			if ( ! preg_match( '/^[A-Za-z0-9_]+$/', $segment ) ) {
+				return;
+			}
+		}
+
+		$directory = BLI_PATH . 'includes/';
+
+		foreach ( $segments as $segment ) {
+			$directory .= strtolower( $segment ) . '/';
+		}
+
+		$slug = strtolower( str_replace( '_', '-', $leaf ) );
+
+		foreach ( array( 'class-', 'interface-', 'trait-' ) as $prefix ) {
+			$path = $directory . $prefix . $slug . '.php';
+
+			if ( is_readable( $path ) ) {
+				require_once $path;
+				return;
+			}
 		}
 	}
 );

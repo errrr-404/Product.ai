@@ -22,6 +22,17 @@
 	<config name="testVersion" value="8.0-"/>
 
 	<rule ref="WordPress"/>
+
+	<!--
+		PHPCompatibilityWP catches removed and deprecated functions, but be clear
+		about what it does NOT cover: the latest stable php-compatibility is 9.3.5,
+		which predates PHP 8 entirely. It knows nothing about functions added in
+		8.0 or later, so it will NOT flag an 8.1+ call in a codebase declaring 8.0
+		support. Verified by probe, not assumed.
+
+		The real check is running tests/ under PHP 8.0. Treat a green run here as
+		evidence about deprecations only.
+	-->
 	<rule ref="PHPCompatibilityWP"/>
 
 	<rule ref="WordPress.WP.I18n">
@@ -70,5 +81,17 @@
 	</rule>
 	<rule ref="WordPress.PHP.DevelopmentFunctions">
 		<exclude-pattern>*/tests/*</exclude-pattern>
+	</rule>
+
+	<!--
+		Exception messages in the AI layer are developer-facing diagnostics, and the
+		classes that raise them are deliberately free of WordPress functions so the
+		fixture suites run standalone — they cannot call esc_html() even in
+		principle. Nothing surfaces a raw getMessage() to a browser: the Import
+		Report maps the stable code_slug() to a translated reason, and escapes every
+		cell with esc_html() at render.
+	-->
+	<rule ref="WordPress.Security.EscapeOutput.ExceptionNotEscaped">
+		<exclude-pattern>*/includes/ai/*</exclude-pattern>
 	</rule>
 </ruleset>

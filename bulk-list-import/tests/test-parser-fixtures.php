@@ -18,9 +18,7 @@
 
 declare( strict_types = 1 );
 
-define( 'BLI_PARSER_STANDALONE', true );
-
-require_once __DIR__ . '/../includes/class-parser.php';
+require_once __DIR__ . '/bootstrap.php';
 
 /**
  * Fixture set: raw line => expected [ name, variant, price ].

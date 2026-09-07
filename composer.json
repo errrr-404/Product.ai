@@ -19,6 +19,11 @@
 	"scripts": {
 		"lint": "phpcs",
 		"lint:fix": "phpcbf",
-		"test": "php bulk-list-import/tests/test-parser-fixtures.php"
+		"test": [
+			"@test:parser",
+			"@test:validator"
+		],
+		"test:parser": "php bulk-list-import/tests/test-parser-fixtures.php",
+		"test:validator": "php bulk-list-import/tests/test-response-validator.php"
 	}
 }
