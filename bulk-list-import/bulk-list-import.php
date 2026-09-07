@@ -37,12 +37,12 @@ define( 'BLI_URL', plugin_dir_url( __FILE__ ) );
  *   BulkListImport\SKU_Generator  ->  includes/class-sku-generator.php
  */
 spl_autoload_register(
-	static function ( string $class ): void {
-		if ( ! str_starts_with( $class, 'BulkListImport\\' ) ) {
+	static function ( string $class_name ): void {
+		if ( ! str_starts_with( $class_name, 'BulkListImport\\' ) ) {
 			return;
 		}
 
-		$relative = substr( $class, strlen( 'BulkListImport\\' ) );
+		$relative = substr( $class_name, strlen( 'BulkListImport\\' ) );
 		$file     = 'class-' . strtolower( str_replace( '_', '-', $relative ) ) . '.php';
 		$path     = BLI_PATH . 'includes/' . $file;
 

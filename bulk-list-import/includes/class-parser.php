@@ -35,23 +35,96 @@ class Parser {
 	 */
 	private const UNITS = array(
 		// Volume.
-		'cl', 'ml', 'l', 'ltr', 'litre', 'litres', 'liter', 'liters', 'gal',
+		'cl',
+		'ml',
+		'l',
+		'ltr',
+		'litre',
+		'litres',
+		'liter',
+		'liters',
+		'gal',
 		// Weight.
-		'kg', 'g', 'mg', 'lb', 'lbs', 'oz',
+		'kg',
+		'g',
+		'mg',
+		'lb',
+		'lbs',
+		'oz',
 		// Digital capacity.
-		'gb', 'tb', 'mb', 'kb',
+		'gb',
+		'tb',
+		'mb',
+		'kb',
 		// Length.
-		'mm', 'cm', 'm', 'inch', 'inches', 'ft',
+		'mm',
+		'cm',
+		'm',
+		'inch',
+		'inches',
+		'ft',
 		// Power, electrical, display.
-		'mah', 'wh', 'kwh', 'kw', 'w', 'v', 'hz', 'ghz', 'mhz', 'mp', 'ppi', 'rpm',
+		'mah',
+		'wh',
+		'kwh',
+		'kw',
+		'w',
+		'v',
+		'hz',
+		'ghz',
+		'mhz',
+		'mp',
+		'ppi',
+		'rpm',
 		// Duration — warranty periods, age statements, course lengths.
-		'years', 'year', 'yrs', 'yr', 'months', 'month', 'days', 'day',
+		'years',
+		'year',
+		'yrs',
+		'yr',
+		'months',
+		'month',
+		'days',
+		'day',
 		// Count nouns.
-		'pack', 'packs', 'pcs', 'pc', 'piece', 'pieces', 'ct', 'count',
-		'tablets', 'tablet', 'caps', 'capsule', 'capsules', 'sachets', 'sachet',
-		'sheets', 'sheet', 'rolls', 'roll', 'bag', 'bags', 'box', 'boxes', 'tabs',
-		'units', 'unit', 'pairs', 'pair', 'set', 'sets', 'bottles', 'bottle',
-		'cans', 'can', 'tins', 'tin', 'servings', 'doses', 'dose',
+		'pack',
+		'packs',
+		'pcs',
+		'pc',
+		'piece',
+		'pieces',
+		'ct',
+		'count',
+		'tablets',
+		'tablet',
+		'caps',
+		'capsule',
+		'capsules',
+		'sachets',
+		'sachet',
+		'sheets',
+		'sheet',
+		'rolls',
+		'roll',
+		'bag',
+		'bags',
+		'box',
+		'boxes',
+		'tabs',
+		'units',
+		'unit',
+		'pairs',
+		'pair',
+		'set',
+		'sets',
+		'bottles',
+		'bottle',
+		'cans',
+		'can',
+		'tins',
+		'tin',
+		'servings',
+		'doses',
+		'dose',
 	);
 
 	/**
@@ -60,10 +133,38 @@ class Parser {
 	 * @var string[]
 	 */
 	private const COLUMN_LABELS = array(
-		'product', 'products', 'name', 'item', 'items', 'title', 'description',
-		'desc', 'price', 'cost', 'amount', 'value', 'size', 'sizes', 'cl', 'ml',
-		'volume', 'unit', 'units', 'qty', 'quantity', 'sku', 'code', 'category',
-		'brand', 'variant', 'spec', 'specs', 'stock', 'weight', 'no', 's/n',
+		'product',
+		'products',
+		'name',
+		'item',
+		'items',
+		'title',
+		'description',
+		'desc',
+		'price',
+		'cost',
+		'amount',
+		'value',
+		'size',
+		'sizes',
+		'cl',
+		'ml',
+		'volume',
+		'unit',
+		'units',
+		'qty',
+		'quantity',
+		'sku',
+		'code',
+		'category',
+		'brand',
+		'variant',
+		'spec',
+		'specs',
+		'stock',
+		'weight',
+		'no',
+		's/n',
 	);
 
 	/**
@@ -71,6 +172,13 @@ class Parser {
 	 */
 	private const CURRENCY = '₦|\$|€|£|¥|₹|NGN|USD|GBP|EUR|ZAR|KES|GHS';
 
+	// The folding table is laid out as a readable grid, six mappings per line.
+	// One item per line would make it ~190 lines and destroy the property that
+	// makes it verifiable: you can see at a glance that every key is two bytes
+	// and every value is plain ASCII. Scoped to this const only.
+	// phpcs:disable WordPress.Arrays.ArrayDeclarationSpacing.ArrayItemNoNewLine
+	// phpcs:disable Universal.WhiteSpace.CommaSpacing.TooMuchSpaceAfter
+	// phpcs:disable WordPress.Arrays.MultipleStatementAlignment.DoubleArrowNotAligned
 	/**
 	 * ASCII folding table: Latin-1 Supplement (U+00C0–U+00FF) and Latin
 	 * Extended-A (U+0100–U+017F).
@@ -136,6 +244,7 @@ class Parser {
 		'Ÿ' => 'Y',  'Ź' => 'Z',  'ź' => 'z',  'Ż' => 'Z',  'ż' => 'z',  'Ž' => 'Z',
 		'ž' => 'z',  'ſ' => 's',
 	);
+	// phpcs:enable WordPress.Arrays.ArrayDeclarationSpacing.ArrayItemNoNewLine, Universal.WhiteSpace.CommaSpacing.TooMuchSpaceAfter, WordPress.Arrays.MultipleStatementAlignment.DoubleArrowNotAligned
 
 	/**
 	 * Column separators. A spaced hyphen counts; an unspaced one does not, so
@@ -291,6 +400,8 @@ class Parser {
 	 * PHP note: trim() with a character list works on *bytes*, so passing an em
 	 * dash there would shred any adjacent multi-byte character — "₦" and "—"
 	 * share a leading byte. A UTF-8-aware regex is the only safe way to do this.
+	 *
+	 * @param string $text Text to trim.
 	 */
 	private function trim_edges( string $text ): string {
 		return (string) preg_replace( '/(?:^[\s\-–—:]+)|(?:[\s\-–—:]+$)/u', '', $text );
@@ -330,10 +441,13 @@ class Parser {
 		// the mbstring extension to be present.
 		$length = (int) preg_match_all( '/./u', $text );
 
+		$words = preg_split( '/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY );
+		$words = is_array( $words ) ? $words : array();
+
 		return '' !== $letters
-			&& $letters === strtoupper( $letters )
+			&& strtoupper( $letters ) === $letters
 			&& $length <= 40
-			&& count( preg_split( '/\s+/u', $text ) ?: array() ) <= 4;
+			&& count( $words ) <= 4;
 	}
 
 	/**
@@ -343,7 +457,7 @@ class Parser {
 	 * price detection so they can never be read as a price. Placeholders contain
 	 * no digits, so the price scan cannot see through them.
 	 *
-	 * @param string               $text  Line to mask.
+	 * @param string             $text  Line to mask.
 	 * @param array<int, string> $specs Filled with the masked spec texts, by reference.
 	 * @return string Masked line.
 	 */
@@ -388,7 +502,7 @@ class Parser {
 		);
 
 		// 5. A parenthetical that already contains a spec becomes one group, so
-		//    "(50kg bag)" and "(60 caps)" stay together as a single variant.
+		// "(50kg bag)" and "(60 caps)" stay together as a single variant.
 		$text = (string) preg_replace_callback(
 			'/\(([^()]*§[A-Z]+§[^()]*)\)/u',
 			static fn( array $m ) => $add( $m[1] ),
@@ -400,6 +514,8 @@ class Parser {
 
 	/**
 	 * Build a letters-only placeholder for spec index $index (0 -> §A§, 26 -> §BA§).
+	 *
+	 * @param int $index Zero-based spec index.
 	 */
 	private static function placeholder( int $index ): string {
 		$out = '';
@@ -472,7 +588,7 @@ class Parser {
 					continue;
 				}
 
-				$symbol  = '';
+				$symbol = '';
 				if ( isset( $match['pre'] ) && '' !== $match['pre'][0] ) {
 					$symbol = $match['pre'][0];
 				} elseif ( isset( $match['post'] ) && '' !== $match['post'][0] ) {
@@ -514,6 +630,8 @@ class Parser {
 	 *
 	 * Handles "2,260,000", "8000", "999", "1,250.50" and the European "1.250,50"
 	 * by treating whichever of "," or "." appears last as the decimal separator.
+	 *
+	 * @param string $raw Matched number text.
 	 */
 	private function to_number( string $raw ): ?float {
 		$text = str_replace( ' ', '', $raw );
@@ -544,7 +662,8 @@ class Parser {
 	 * @param string $run     Receives the trailing spec run, by reference.
 	 */
 	private function split_trailing_specs( string &$segment, string &$run ): void {
-		$tokens = preg_split( '/\s+/u', $segment, -1, PREG_SPLIT_NO_EMPTY ) ?: array();
+		$split  = preg_split( '/\s+/u', $segment, -1, PREG_SPLIT_NO_EMPTY );
+		$tokens = is_array( $split ) ? $split : array();
 		$cursor = count( $tokens );
 
 		while ( $cursor > 0 ) {
@@ -581,6 +700,8 @@ class Parser {
 	 * PHP note: strtr() with an array replaces the longest matching key first and
 	 * never re-scans its own output, so it is safe for multi-byte keys and needs
 	 * no mbstring extension.
+	 *
+	 * @param string $text Text to fold.
 	 */
 	private function fold_accents( string $text ): string {
 		return strtr( $text, self::ASCII_FOLD );
@@ -592,6 +713,9 @@ class Parser {
 	 * Folding must happen *before* the non-ASCII strip. The other order deletes
 	 * accented characters outright, so "Rémy Martin" would key as "rmymartin"
 	 * and never match "Remy Martin".
+	 *
+	 * @param string $name    Parsed product name.
+	 * @param string $variant Parsed variant/spec.
 	 */
 	private function duplicate_key( string $name, string $variant ): string {
 		$folded = $this->fold_accents( $name . '|' . $variant );
@@ -621,7 +745,7 @@ class Parser {
 			}
 
 			if ( isset( $seen[ $key ] ) ) {
-				$rows[ $index ]['flags'][]     = 'duplicate';
+				$rows[ $index ]['flags'][]      = 'duplicate';
 				$rows[ $index ]['duplicate_of'] = $seen[ $key ];
 				$rows[ $index ]['importable']   = false;
 			} else {

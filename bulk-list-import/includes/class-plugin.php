@@ -23,10 +23,25 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class Plugin {
 
+	/**
+	 * The single instance.
+	 *
+	 * @var Plugin|null
+	 */
 	private static ?Plugin $instance = null;
 
+	/**
+	 * The importer screen.
+	 *
+	 * @var Admin_Page
+	 */
 	private Admin_Page $admin_page;
 
+	/**
+	 * Whether hooks have already been registered.
+	 *
+	 * @var bool
+	 */
 	private bool $booted = false;
 
 	/**

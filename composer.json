@@ -1,0 +1,24 @@
+{
+	"name": "bitmavenn/bulk-list-import",
+	"description": "Turn a raw pasted product list into reviewable draft WooCommerce products with continuous SKUs.",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=8.0"
+	},
+	"require-dev": {
+		"wp-coding-standards/wpcs": "^3.1",
+		"dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+		"phpcompatibility/phpcompatibility-wp": "^2.1"
+	},
+	"config": {
+		"allow-plugins": {
+			"dealerdirect/phpcodesniffer-composer-installer": true
+		}
+	},
+	"scripts": {
+		"lint": "phpcs",
+		"lint:fix": "phpcbf",
+		"test": "php bulk-list-import/tests/test-parser-fixtures.php"
+	}
+}

@@ -140,7 +140,7 @@ class Admin_Page {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- nonce checked below when present.
 		if ( isset( $_GET['retry'], $_GET['line'] ) && is_string( $_GET['retry'] ) && check_admin_referer( 'bli_retry' ) ) {
 			$report = Import_Report::get( sanitize_text_field( wp_unslash( $_GET['retry'] ) ) );
-			$line   = (int) $_GET['line'];
+			$line   = absint( $_GET['line'] );
 
 			if ( null !== $report ) {
 				foreach ( (array) $report['entries'] as $entry ) {
@@ -199,9 +199,14 @@ class Admin_Page {
 	 * Step 2 — the preview table.
 	 */
 	private function render_preview(): void {
+		// The nonce is verified by render(), which is the only caller and checks
+		// check_admin_referer( 'bli_parse' ) before dispatching here.
+		// phpcs:disable WordPress.Security.NonceVerification.Missing -- verified in render().
 		$source = isset( $_POST['bli_source'] ) && is_string( $_POST['bli_source'] ) ? sanitize_textarea_field( wp_unslash( $_POST['bli_source'] ) ) : '';
 		$batch  = isset( $_POST['bli_batch_size'] ) && is_scalar( $_POST['bli_batch_size'] ) ? absint( wp_unslash( $_POST['bli_batch_size'] ) ) : self::DEFAULT_BATCH_SIZE;
 		$prefix = isset( $_POST['bli_sku_prefix'] ) && is_string( $_POST['bli_sku_prefix'] ) ? sanitize_text_field( wp_unslash( $_POST['bli_sku_prefix'] ) ) : '';
+
+		// phpcs:enable WordPress.Security.NonceVerification.Missing
 
 		$batch = max( 1, min( 500, $batch ) );
 
@@ -222,9 +227,9 @@ class Admin_Page {
 			return;
 		}
 
-		$sku         = SKU_Generator::detect( $prefix );
-		$importable  = 0;
-		$sku_offset  = 0;
+		$sku        = SKU_Generator::detect( $prefix );
+		$importable = 0;
+		$sku_offset = 0;
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="bli-preview-form">';
 		wp_nonce_field( 'bli_import' );
@@ -393,8 +398,11 @@ class Admin_Page {
 		check_admin_referer( 'bli_import' );
 
 		$prefix = isset( $_POST['bli_sku_prefix'] ) && is_string( $_POST['bli_sku_prefix'] ) ? sanitize_text_field( wp_unslash( $_POST['bli_sku_prefix'] ) ) : '';
-		$raw    = isset( $_POST['bli_rows'] ) && is_array( $_POST['bli_rows'] ) ? wp_unslash( $_POST['bli_rows'] ) : array();
-		$rows   = array();
+		// Sanitised field by field in the loop below; there is no whole-array
+		// sanitiser for a nested structure like this one.
+		// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- each field sanitised individually below.
+		$raw  = isset( $_POST['bli_rows'] ) && is_array( $_POST['bli_rows'] ) ? wp_unslash( $_POST['bli_rows'] ) : array();
+		$rows = array();
 
 		foreach ( (array) $raw as $item ) {
 			if ( ! is_array( $item ) ) {

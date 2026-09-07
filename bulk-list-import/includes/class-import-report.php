@@ -69,6 +69,7 @@ class Import_Report {
 	/**
 	 * Fetch one report by ID.
 	 *
+	 * @param string $id Report ID.
 	 * @return array<string, mixed>|null
 	 */
 	public static function get( string $id ): ?array {
@@ -109,6 +110,7 @@ class Import_Report {
 	/**
 	 * Human label and CSS modifier for an outcome.
 	 *
+	 * @param string $outcome Stored outcome key.
 	 * @return array{0: string, 1: string}
 	 */
 	public static function outcome_label( string $outcome ): array {
@@ -260,6 +262,8 @@ class Import_Report {
 
 	/**
 	 * Links to earlier reports.
+	 *
+	 * @param string $current ID of the report on screen.
 	 */
 	private static function render_history( string $current ): void {
 		$reports = self::all();
@@ -338,6 +342,7 @@ class Import_Report {
 			);
 		}
 
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- streaming a download to php://output; WP_Filesystem cannot stream.
 		fclose( $out );
 		exit;
 	}

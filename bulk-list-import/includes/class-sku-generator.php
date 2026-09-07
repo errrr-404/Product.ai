@@ -25,9 +25,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class SKU_Generator {
 
-	private const LOCK_NAME      = 'bli_sku_sequence';
-	private const LOCK_TIMEOUT   = 10;
-	private const OPTION_LOCK    = 'bli_sku_lock';
+	private const LOCK_NAME       = 'bli_sku_sequence';
+	private const LOCK_TIMEOUT    = 10;
+	private const OPTION_LOCK     = 'bli_sku_lock';
 	private const OPTION_RESERVED = 'bli_sku_reserved';
 
 	/**
@@ -38,20 +38,28 @@ class SKU_Generator {
 
 	/**
 	 * Alphabetic/symbol prefix, e.g. "GE-".
+	 *
+	 * @var string
 	 */
 	private string $prefix;
 
 	/**
 	 * Zero-padding width of the numeric part, e.g. 4 for "0059".
+	 *
+	 * @var int
 	 */
 	private int $pad;
 
 	/**
 	 * Highest number known to be spoken for — in the catalogue or reserved.
+	 *
+	 * @var int
 	 */
 	private int $highest;
 
 	/**
+	 * Build a generator positioned at a known point in the sequence.
+	 *
 	 * @param string $prefix  Prefix, e.g. "GE-".
 	 * @param int    $pad     Zero-padding width.
 	 * @param int    $highest Highest number already spoken for.
@@ -202,7 +210,11 @@ class SKU_Generator {
 	 *
 	 * @param int $count How many SKUs the caller needs.
 	 * @return array<int, string> Exactly $count SKUs, in order.
-	 * @throws \RuntimeException If the lock cannot be acquired, or no free block exists.
+	 * @throws \RuntimeException If the sequence lock cannot be acquired — another
+	 *                           import is mid-reservation, so retrying works.
+	 * @throws \OverflowException If no free block exists below the probe cap — the
+	 *                            sequence needs attention, so retrying will not help.
+	 * @throws \Throwable If the reservation transaction fails; rolled back first.
 	 */
 	public function reserve( int $count ): array {
 		if ( $count < 1 ) {
@@ -218,21 +230,23 @@ class SKU_Generator {
 		$skus = array();
 
 		try {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
 			$wpdb->query( 'START TRANSACTION' );
 
 			// Re-read under the lock. Another import may have reserved a block
 			// between detect() and here.
-			$groups  = self::scan_catalogue();
-			$in_db   = (int) ( $groups[ $this->prefix ]['highest'] ?? 0 );
-			$number  = max( $this->highest, $in_db, self::reserved_high_water( $this->prefix ) );
-			$probes  = 0;
+			$groups = self::scan_catalogue();
+			$in_db  = (int) ( $groups[ $this->prefix ]['highest'] ?? 0 );
+			$number = max( $this->highest, $in_db, self::reserved_high_water( $this->prefix ) );
+			$probes = 0;
+			$issued = 0;
 
-			while ( count( $skus ) < $count ) {
+			while ( $issued < $count ) {
 				++$number;
 				++$probes;
 
 				if ( $probes > self::MAX_PROBES ) {
-					throw new \RuntimeException( 'Could not find a free block of SKUs.' );
+					throw new \OverflowException( 'Could not find a free block of SKUs.' );
 				}
 
 				$candidate = $this->format( $number );
@@ -243,14 +257,17 @@ class SKU_Generator {
 				}
 
 				$skus[] = $candidate;
+				++$issued;
 			}
 
 			self::store_high_water( $this->prefix, $number );
 
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
 			$wpdb->query( 'COMMIT' );
 
 			$this->highest = $number;
 		} catch ( \Throwable $e ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
 			$wpdb->query( 'ROLLBACK' );
 			throw $e;
 		} finally {
@@ -265,6 +282,8 @@ class SKU_Generator {
 	 *
 	 * Read past any persistent object cache: a stale value here would hand the
 	 * same block to two imports.
+	 *
+	 * @param string $prefix SKU prefix.
 	 */
 	private static function reserved_high_water( string $prefix ): int {
 		wp_cache_delete( self::OPTION_RESERVED, 'options' );
@@ -280,6 +299,9 @@ class SKU_Generator {
 
 	/**
 	 * Record the highest number reserved for a prefix.
+	 *
+	 * @param string $prefix SKU prefix.
+	 * @param int    $number Highest number reserved.
 	 */
 	private static function store_high_water( string $prefix, int $number ): void {
 		$reserved = get_option( self::OPTION_RESERVED, array() );
@@ -345,6 +367,8 @@ class SKU_Generator {
 
 	/**
 	 * Format a number as a SKU.
+	 *
+	 * @param int $number Sequence number.
 	 */
 	private function format( int $number ): string {
 		return $this->prefix . str_pad( (string) $number, $this->pad, '0', STR_PAD_LEFT );
@@ -352,6 +376,8 @@ class SKU_Generator {
 
 	/**
 	 * Whether a SKU already exists in the catalogue.
+	 *
+	 * @param string $sku Candidate SKU.
 	 */
 	private function is_taken( string $sku ): bool {
 		return function_exists( 'wc_get_product_id_by_sku' ) && wc_get_product_id_by_sku( $sku ) > 0;

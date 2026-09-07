@@ -39,11 +39,11 @@ class Importer {
 	 */
 	public function import( array $rows, string $prefix = '' ): array {
 		// Pass 1 — plan. Rows rejected here never consume a SKU.
-		$plans = array();
+		$plans  = array();
 		$needed = 0;
 
 		foreach ( $rows as $index => $row ) {
-			$plan           = $this->plan_row( $row );
+			$plan            = $this->plan_row( $row );
 			$plans[ $index ] = $plan;
 
 			if ( 'create' === $plan['action'] ) {
@@ -164,6 +164,7 @@ class Importer {
 
 		// Per-row transaction: if the CRUD save fails halfway, this row leaves
 		// nothing half-written behind.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
 		$wpdb->query( 'START TRANSACTION' );
 
 		try {
@@ -194,14 +195,9 @@ class Importer {
 				$product->update_meta_data( '_bli_variant', $plan['variant'] );
 			}
 
-			$product_id = $product->save();
-
-			if ( ! $product_id ) {
-				throw new \RuntimeException( 'WC_Product_Simple::save() returned no ID' );
-			}
-
-			$wpdb->query( 'COMMIT' );
+			$product_id = (int) $product->save();
 		} catch ( \Throwable $e ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
 			$wpdb->query( 'ROLLBACK' );
 
 			return $this->entry(
@@ -211,6 +207,16 @@ class Importer {
 				sprintf( __( 'Could not save product: %s', 'bulk-list-import' ), $e->getMessage() )
 			);
 		}
+
+		if ( $product_id <= 0 ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
+			$wpdb->query( 'ROLLBACK' );
+
+			return $this->entry( $row, 'failed', __( 'WooCommerce did not return a product ID', 'bulk-list-import' ) );
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
+		$wpdb->query( 'COMMIT' );
 
 		$notices = (array) $plan['notices'];
 
@@ -230,9 +236,11 @@ class Importer {
 	 * @return array<int, array<string, mixed>>
 	 */
 	private function fail_all( array $rows, \Throwable $e ): array {
-		$reason = __( 'Another import is running — SKU sequence is locked. Try again in a moment.', 'bulk-list-import' );
-
-		if ( ! str_contains( $e->getMessage(), 'lock' ) ) {
+		if ( $e instanceof \OverflowException ) {
+			$reason = __( 'No free block of SKUs is available — check the sequence for a gap or a very high existing number.', 'bulk-list-import' );
+		} elseif ( $e instanceof \RuntimeException ) {
+			$reason = __( 'Another import is running — SKU sequence is locked. Try again in a moment.', 'bulk-list-import' );
+		} else {
 			/* translators: %s: error message. */
 			$reason = sprintf( __( 'Could not reserve SKUs: %s', 'bulk-list-import' ), $e->getMessage() );
 		}
