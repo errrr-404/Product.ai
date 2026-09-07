@@ -83,7 +83,15 @@ class Parser {
 	 * drift between them would only surface as a duplicate slipping through in
 	 * a real store.
 	 *
-	 * Every key is a two-byte UTF-8 sequence, so strtr() matching is unambiguous.
+	 * INVARIANT: every key here is a two-byte UTF-8 sequence (U+0080–U+07FF), so
+	 * no key can be a byte-prefix of another and strtr() matching is unambiguous.
+	 * Latin Extended-B (U+0180–U+024F) stays two-byte and is safe to add. Anything
+	 * from U+0800 up — Vietnamese precomposed forms in Latin Extended Additional
+	 * (U+1E00–U+1EFF), for instance — is three bytes and breaks the invariant.
+	 * That is survivable, because strtr() tries the longest keys first, but the
+	 * uniform width is what makes the table obviously correct on inspection. If
+	 * you add wider sequences, say so here.
+	 *
 	 * If a gap appears, add a row here and a fixture line — same workflow as any
 	 * other parser fix.
 	 *
@@ -441,8 +449,12 @@ class Parser {
 	 * @return array<string, mixed>|null
 	 */
 	private function find_price( array $segments ): ?array {
+		// The leading lookbehind rejects a digit run that is glued to a letter, a
+		// decimal point, a thousands comma — or a minus sign. That last one keeps
+		// "-1" from reading as a price of 1, and stops the "800" in a model number
+		// like "T-800" from ever becoming a candidate.
 		$pattern = '/(?P<pre>' . self::CURRENCY . ')?\s*'
-			. '(?<![A-Za-z0-9.,])(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)(?![A-Za-z])'
+			. '(?<![A-Za-z0-9.,\-])(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)(?![A-Za-z])'
 			. '\s*(?P<post>' . self::CURRENCY . ')?/iu';
 
 		$best = null;

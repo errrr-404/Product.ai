@@ -59,6 +59,15 @@ $fixtures = array(
 	"Grey Goose\t70cl\t₦49,000"                       => array( 'Grey Goose', '70cl', 49000.0 ),
 	'Element — 70cl — ₦43,000'                        => array( 'Element', '70cl', 43000.0 ),
 	'Product / CL / Price'                            => array( '#heading', '', null ),
+
+	// A negative number is never a price. Before the minus sign was added to the
+	// price lookbehind this parsed as a price of 1.00 with no warning flag at all,
+	// so the row would have imported silently at ₦1.
+	//
+	// The leftover token lands in the variant column rather than being discarded:
+	// the row is flagged no_price, and the user can see and clear "1" in the
+	// preview. Dropping it silently would break "nothing is thrown away silently".
+	'Damaged Stock Item — -1'                         => array( 'Damaged Stock Item', '1', null ),
 );
 
 $parser = new BulkListImport\Parser();
