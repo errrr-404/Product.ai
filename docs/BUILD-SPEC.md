@@ -325,6 +325,20 @@ It is a core feature, not error-handling polish.
 ## Conventions
 
 - **PHP 8.0+**, `declare( strict_types = 1 );` in every file
+- **The 8.0 floor is honour-system unless CI enforces it.** PHPCompatibility's
+  latest stable (9.3.5) predates PHP 8 entirely and knows no 8.x function, so a
+  green PHPCS run says nothing about the floor. `.github/workflows/test.yml`
+  runs the suites on 8.0 — that is what actually enforces it.
+- **Two different reasons a newer function might be unavailable, and they do not
+  overlap.** WordPress polyfills some in `wp-includes/compat.php`, and the
+  WordPress-free classes cannot reach those polyfills anyway:
+  - `str_contains()` — PHP 8.0, so native on the floor. Safe everywhere.
+  - `array_is_list()` — PHP 8.1, and **not** polyfilled by WordPress. Unsafe
+    *anywhere* in this plugin, not merely in the WordPress-free classes.
+
+  Before reaching for anything added after 8.0, check both: is it polyfilled by
+  core, and is the calling class one that can rely on core at all? The next such
+  function will not announce itself.
 - Namespace `BulkListImport`, function prefix `bli_`, text domain
   `bulk-list-import`
 - **Autoloading is convention, not configuration.** The autoloader maps a

@@ -74,7 +74,28 @@ foreach ( require __DIR__ . '/fixtures/description-responses.php' as $case ) {
 			array_keys( $out )
 		);
 
-		$report( array() === $missing, $label, 'missing keys: ' . implode( ', ', $missing ) );
+		if ( array() !== $missing ) {
+			$report( false, $label, 'missing keys: ' . implode( ', ', $missing ) );
+			continue;
+		}
+
+		// Optional value assertions. A case that only checks "it validated" would
+		// pass just as happily on a subtly wrong normalisation.
+		$problem = '';
+
+		foreach ( $case['assert'] ?? array() as $key => $want ) {
+			if ( ( $out[ $key ] ?? null ) !== $want ) {
+				$problem = sprintf(
+					'%s: expected %s, got %s',
+					$key,
+					var_export( $want, true ),
+					var_export( $out[ $key ] ?? null, true )
+				);
+				break;
+			}
+		}
+
+		$report( '' === $problem, $label, $problem );
 	} catch ( Invalid_Response_Exception $e ) {
 		if ( 'ok' === $expect ) {
 			$report( false, $label, sprintf( 'expected ok, got %s: %s', $e->code_slug(), $e->getMessage() ) );

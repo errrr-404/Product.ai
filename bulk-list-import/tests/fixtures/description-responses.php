@@ -167,7 +167,47 @@ RAW
 		,
 	),
 
+	array(
+		'label'  => 'slug full of punctuation that is not an accent',
+		'why'    => "Ascii_Folder covers accents; slugs meet more than that. Apostrophes must vanish rather than split a word — WordPress's own sanitize_title() gives \"levis\", and \"levi-s\" would be a subtly wrong URL. Ampersand, slash, full stop and inch mark all collapse to a single separator.",
+		'expect' => 'ok',
+		'assert' => array( 'slug' => 'levis-501-w32-l34-55-more' ),
+		'raw'    => <<<'RAW'
+{
+  "long_description": "The <strong>Levi's 501 Straight Jeans</strong> are a straight-leg denim jean.",
+  "short_description": "Straight-leg denim jeans.",
+  "slug": "Levi's 501 — W32/L34 — 55\" & More",
+  "brand": "Levi's",
+  "meta_description": "Levi's 501 straight jeans in W32 L34.",
+  "focus_keyword": "levis 501 straight jeans",
+  "attributes": [ { "label": "Waist", "value": "W32" } ],
+  "uncertain_fields": []
+}
+RAW
+		,
+	),
+
 	// -------------------------------------------------------------- invalid --
+
+	array(
+		'label'  => 'name written entirely in a non-Latin script',
+		'why'    => 'Folds to nothing through no fault of the model, so it must not share the empty_field reason a lazy or punctuation-only response gets. Different cause, different fix: this row is unfixable by re-running and the user has to set the slug by hand, which is only sayable in the report if the code says it here.',
+		'expect' => 'slug_not_transliterable',
+		'raw'    => <<<'RAW'
+{
+  "long_description": "The <strong>Кока-Кола</strong> is a soft drink.",
+  "short_description": "Soft drink.",
+  "slug": "Кока-Кола",
+  "brand": "Кока-Кола",
+  "meta_description": "Soft drink.",
+  "focus_keyword": "кока-кола",
+  "attributes": [],
+  "uncertain_fields": []
+}
+RAW
+		,
+	),
+
 
 	array(
 		'label'  => 'truncated mid-string',

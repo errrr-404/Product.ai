@@ -494,7 +494,9 @@ final class Response_Validator {
 	/**
 	 * Whether an array is a list: sequential integer keys from zero.
 	 *
-	 * Not array_is_list(), which is PHP 8.1+. This plugin supports 8.0.
+	 * Not array_is_list(), which is PHP 8.1+ and — unlike str_contains() — is not
+	 * polyfilled by WordPress, so it is unavailable on the floor anywhere in this
+	 * plugin, not merely in the WordPress-free classes.
 	 *
 	 * @param array<mixed> $value Array to test.
 	 */
@@ -513,17 +515,39 @@ final class Response_Validator {
 	 * Stripping non-ASCII without folding would turn "rémy-martin-1738" into
 	 * "rmy-martin-1738" — a silently wrong URL rather than an obviously wrong one.
 	 *
+	 * Quotes and apostrophes are deleted rather than turned into separators, which
+	 * is what WordPress's own sanitize_title() does: "Levi's" should slug as
+	 * "levis", not "levi-s". Everything else non-alphanumeric collapses to a
+	 * single hyphen, so `&`, `/`, `.` and `"` all behave.
+	 *
 	 * @param string $slug Slug as returned by the model.
 	 * @return string A URL-safe slug.
 	 * @throws Invalid_Response_Exception If nothing usable survives normalisation.
 	 */
 	private function normalise_slug( string $slug ): string {
-		$slug = Ascii_Folder::fold( $slug );
-		$slug = strtolower( $slug );
-		$slug = (string) preg_replace( '/[^a-z0-9]+/', '-', $slug );
-		$slug = trim( $slug, '-' );
+		$folded = Ascii_Folder::fold( $slug );
 
-		if ( '' === $slug ) {
+		$folded = str_replace( array( "'", '"', '`', '’', '‘', '“', '”' ), '', $folded );
+
+		$out = strtolower( $folded );
+		$out = (string) preg_replace( '/[^a-z0-9]+/', '-', $out );
+		$out = trim( $out, '-' );
+
+		if ( '' === $out ) {
+			// Two different failures land here and they need different reasons,
+			// because they need different fixes. Punctuation-only means the model
+			// sent nothing usable and the row is worth re-running. A name written
+			// wholly in a script the fold table does not cover — Cyrillic, Arabic,
+			// CJK — is nobody's mistake and re-running cannot help; that user needs
+			// to set the slug by hand.
+			if ( preg_match( '/[\p{L}\p{N}]/u', $slug ) ) {
+				throw new Invalid_Response_Exception(
+					'slug_not_transliterable',
+					'Field "slug" has no Latin-script characters to build a URL from.',
+					'slug'
+				);
+			}
+
 			throw new Invalid_Response_Exception(
 				'empty_field',
 				'Field "slug" contains nothing URL-safe.',
@@ -531,7 +555,7 @@ final class Response_Validator {
 			);
 		}
 
-		return $slug;
+		return $out;
 	}
 
 	/**
