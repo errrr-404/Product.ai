@@ -1,0 +1,131 @@
+/* Bulk List Import — admin styles. */
+
+.bli-tagline {
+	margin: -6px 0 18px;
+	color: #646970;
+	font-size: 14px;
+	font-style: italic;
+}
+
+.bli-paste-form textarea {
+	font-family: Consolas, Monaco, monospace;
+	font-size: 13px;
+	line-height: 1.6;
+}
+
+/* Preview table ---------------------------------------------------------- */
+
+.bli-preview {
+	margin-top: 18px;
+}
+
+.bli-preview .bli-col-row,
+.bli-report .bli-col-row {
+	width: 48px;
+	text-align: right;
+}
+
+.bli-preview td input[type="text"] {
+	width: 100%;
+	max-width: 340px;
+}
+
+.bli-preview .bli-input-variant {
+	max-width: 180px;
+}
+
+.bli-preview .bli-input-price {
+	max-width: 120px;
+	text-align: right;
+}
+
+.bli-preview .bli-sku,
+.bli-report td:nth-child(3) {
+	font-family: Consolas, Monaco, monospace;
+	white-space: nowrap;
+}
+
+.bli-row--heading {
+	background: #f0f0f1;
+}
+
+.bli-row--heading .bli-heading-text {
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	color: #50575e;
+}
+
+.bli-row--locked {
+	opacity: 0.72;
+}
+
+/* Badges ----------------------------------------------------------------- */
+
+.bli-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 10px;
+	font-size: 11px;
+	line-height: 1.7;
+	white-space: nowrap;
+}
+
+.bli-badge--ok {
+	background: #edfaef;
+	color: #00611c;
+	box-shadow: inset 0 0 0 1px #b8e6bf;
+}
+
+.bli-badge--warn {
+	background: #fcf9e8;
+	color: #674f00;
+	box-shadow: inset 0 0 0 1px #f0e3a1;
+}
+
+.bli-badge--bad {
+	background: #fcf0f1;
+	color: #8a2424;
+	box-shadow: inset 0 0 0 1px #f0b8ba;
+}
+
+.bli-badge--muted {
+	background: #f0f0f1;
+	color: #646970;
+	box-shadow: inset 0 0 0 1px #dcdcde;
+}
+
+/* Actions ---------------------------------------------------------------- */
+
+.bli-actions {
+	margin: 18px 0 32px;
+}
+
+.bli-warning {
+	max-width: 640px;
+	margin: 0 0 10px;
+	padding: 10px 12px;
+	border-left: 4px solid #dba617;
+	background: #fcf9e8;
+}
+
+/* Report ----------------------------------------------------------------- */
+
+.bli-report-summary {
+	margin: 12px 0 4px;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.bli-variant {
+	color: #646970;
+	font-size: 12px;
+}
+
+.bli-pro-hint {
+	font-style: italic;
+}
+
+.bli-history {
+	margin-left: 18px;
+	list-style: disc;
+}

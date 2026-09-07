@@ -1,0 +1,25 @@
+# Dependencies (installed via composer / npm, never committed)
+vendor/
+node_modules/
+
+# Local environment — never commit credentials or per-machine config
+.env
+.env.*
+!.env.example
+wp-config-local.php
+*.local
+
+# Logs
+*.log
+debug.log
+
+# Editors / IDEs
+.idea/
+.vscode/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# CLAUDE.md and tests/ are deliberately NOT ignored — both are tracked.
