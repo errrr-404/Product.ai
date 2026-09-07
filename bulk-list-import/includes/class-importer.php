@@ -23,63 +23,82 @@ class Importer {
 	/**
 	 * Import a batch of reviewed rows.
 	 *
+	 * Runs in three passes:
+	 *
+	 *   1. Plan every row, deciding which will attempt creation. No writes.
+	 *   2. Reserve exactly that many SKUs, under a lock held for milliseconds.
+	 *   3. Create products, unlocked, against the pre-assigned numbers.
+	 *
 	 * Every input row produces exactly one report entry. A row that vanishes
 	 * silently is the worst outcome in this plugin — the user believes they
 	 * imported 20 products when they imported 16.
 	 *
-	 * @param array<int, array<string, mixed>> $rows     Reviewed rows from the preview table.
-	 * @param string                           $prefix   Optional SKU prefix override.
+	 * @param array<int, array<string, mixed>> $rows   Reviewed rows from the preview table.
+	 * @param string                           $prefix Optional SKU prefix override.
 	 * @return array<string, mixed> The persisted report.
 	 */
 	public function import( array $rows, string $prefix = '' ): array {
-		$entries = array();
+		// Pass 1 — plan. Rows rejected here never consume a SKU.
+		$plans = array();
+		$needed = 0;
 
-		$sku = SKU_Generator::detect( $prefix );
+		foreach ( $rows as $index => $row ) {
+			$plan           = $this->plan_row( $row );
+			$plans[ $index ] = $plan;
 
-		// One named lock for the whole batch. This is what actually stops two
-		// concurrent imports claiming the same number; the per-row transaction
-		// below only guards a single product's own writes.
-		if ( ! $sku->lock() ) {
-			foreach ( $rows as $row ) {
-				$entries[] = $this->entry(
-					$row,
-					'failed',
-					__( 'Another import is running — SKU sequence is locked. Try again in a moment.', 'bulk-list-import' )
-				);
+			if ( 'create' === $plan['action'] ) {
+				++$needed;
 			}
-
-			return Import_Report::save( $entries );
 		}
 
-		try {
-			foreach ( $rows as $row ) {
-				$entries[] = $this->import_row( $row, $sku );
+		// Pass 2 — reserve. Short locked transaction, released immediately.
+		$reserved = array();
+
+		if ( $needed > 0 ) {
+			try {
+				$reserved = SKU_Generator::detect( $prefix )->reserve( $needed );
+			} catch ( \Throwable $e ) {
+				return Import_Report::save( $this->fail_all( $rows, $e ) );
 			}
-		} finally {
-			$sku->unlock();
+		}
+
+		// Pass 3 — create, unlocked.
+		$entries = array();
+		$cursor  = 0;
+
+		foreach ( $rows as $index => $row ) {
+			$plan = $plans[ $index ];
+
+			if ( 'create' !== $plan['action'] ) {
+				$entries[] = $this->entry( $row, $plan['outcome'], $plan['reason'] );
+				continue;
+			}
+
+			$entries[] = $this->create_row( $row, $plan, $reserved[ $cursor ] );
+			++$cursor;
 		}
 
 		return Import_Report::save( $entries );
 	}
 
 	/**
-	 * Import a single row.
+	 * Decide what will happen to a row, without writing anything.
 	 *
 	 * @param array<string, mixed> $row Reviewed row.
-	 * @param SKU_Generator        $sku Shared generator, held under lock by the caller.
-	 * @return array<string, mixed> Report entry.
+	 * @return array<string, mixed> Either action=create with a prepared payload,
+	 *                              or action=reject with an outcome and reason.
 	 */
-	private function import_row( array $row, SKU_Generator $sku ): array {
+	private function plan_row( array $row ): array {
 		$flags = (array) ( $row['flags'] ?? array() );
 
 		if ( 'heading' === ( $row['type'] ?? 'product' ) ) {
-			return $this->entry( $row, 'skipped', __( 'Heading or column labels — not a product', 'bulk-list-import' ) );
+			return $this->reject( 'skipped', __( 'Heading or column labels — not a product', 'bulk-list-import' ) );
 		}
 
 		if ( in_array( 'duplicate', $flags, true ) ) {
 			$of = (int) ( $row['duplicate_of'] ?? 0 );
-			return $this->entry(
-				$row,
+
+			return $this->reject(
 				'skipped',
 				$of > 0
 					/* translators: %d: line number of the earlier identical row. */
@@ -89,13 +108,13 @@ class Importer {
 		}
 
 		if ( empty( $row['selected'] ) ) {
-			return $this->entry( $row, 'skipped', __( 'Not selected for import', 'bulk-list-import' ) );
+			return $this->reject( 'skipped', __( 'Not selected for import', 'bulk-list-import' ) );
 		}
 
 		$name = trim( (string) ( $row['name'] ?? '' ) );
 
 		if ( '' === $name ) {
-			return $this->entry( $row, 'failed', __( 'No product name could be read from this line', 'bulk-list-import' ) );
+			return $this->reject( 'failed', __( 'No product name could be read from this line', 'bulk-list-import' ) );
 		}
 
 		$price   = $row['price'];
@@ -105,7 +124,7 @@ class Importer {
 			$price     = '';
 			$notices[] = __( 'No price found — set it before publishing', 'bulk-list-import' );
 		} elseif ( ! is_numeric( $price ) || (float) $price < 0 ) {
-			return $this->entry( $row, 'failed', __( 'Price could not be parsed', 'bulk-list-import' ) );
+			return $this->reject( 'failed', __( 'Price could not be parsed', 'bulk-list-import' ) );
 		} else {
 			$price = wc_format_decimal( (string) $price );
 		}
@@ -114,45 +133,65 @@ class Importer {
 			$notices[] = __( 'Price was guessed from a bare number — verify from source', 'bulk-list-import' );
 		}
 
-		$assigned = $sku->next();
+		return array(
+			'action'  => 'create',
+			'name'    => $name,
+			'price'   => $price,
+			'variant' => trim( (string) ( $row['variant'] ?? '' ) ),
+			'notices' => $notices,
+		);
+	}
 
-		if ( wc_get_product_id_by_sku( $assigned ) > 0 ) {
+	/**
+	 * Create one product against its pre-assigned SKU.
+	 *
+	 * @param array<string, mixed> $row  Source row, for the report entry.
+	 * @param array<string, mixed> $plan Prepared payload from plan_row().
+	 * @param string               $sku  The SKU reserved for this row.
+	 * @return array<string, mixed> Report entry.
+	 */
+	private function create_row( array $row, array $plan, string $sku ): array {
+		// The reserved block protects against a collision with a concurrent
+		// import. It cannot protect against one that predates the batch — a
+		// product trashed and restored, or a SKU typed in by hand. Re-check, and
+		// fail this row rather than silently shifting the rest of the sequence.
+		if ( wc_get_product_id_by_sku( $sku ) > 0 ) {
 			/* translators: %s: SKU. */
-			return $this->entry( $row, 'failed', sprintf( __( 'SKU %s already in use', 'bulk-list-import' ), $assigned ) );
+			return $this->entry( $row, 'failed', sprintf( __( 'SKU %s already in use', 'bulk-list-import' ), $sku ) );
 		}
 
 		global $wpdb;
 
 		// Per-row transaction: if the CRUD save fails halfway, this row leaves
-		// nothing half-written behind. Deliberately scoped to one product so a
-		// long batch never holds a long transaction open.
+		// nothing half-written behind.
 		$wpdb->query( 'START TRANSACTION' );
 
 		try {
 			$product = new \WC_Product_Simple();
-			$product->set_name( $name );
-			$product->set_sku( $assigned );
+			$product->set_name( $plan['name'] );
+			$product->set_sku( $sku );
 			$product->set_status( 'draft' );          // Draft is the default, always.
 			$product->set_catalog_visibility( 'visible' );
 
-			if ( '' !== $price ) {
-				$product->set_regular_price( (string) $price );
+			if ( '' !== $plan['price'] ) {
+				$product->set_regular_price( (string) $plan['price'] );
 			}
 
-			$variant = trim( (string) ( $row['variant'] ?? '' ) );
-			if ( '' !== $variant ) {
-				$product->set_attributes( array( $this->variant_attribute( $variant ) ) );
+			if ( '' !== $plan['variant'] ) {
+				$product->set_attributes( array( $this->variant_attribute( $plan['variant'] ) ) );
 			}
 
 			$tag_id = $this->review_tag_id();
+
 			if ( $tag_id > 0 ) {
 				$product->set_tag_ids( array( $tag_id ) );
 			}
 
 			$product->update_meta_data( '_bli_source_line', (int) ( $row['line'] ?? 0 ) );
 			$product->update_meta_data( '_bli_raw_line', (string) ( $row['raw'] ?? '' ) );
-			if ( '' !== $variant ) {
-				$product->update_meta_data( '_bli_variant', $variant );
+
+			if ( '' !== $plan['variant'] ) {
+				$product->update_meta_data( '_bli_variant', $plan['variant'] );
 			}
 
 			$product_id = $product->save();
@@ -173,12 +212,53 @@ class Importer {
 			);
 		}
 
+		$notices = (array) $plan['notices'];
+
 		$entry               = $this->entry( $row, array() === $notices ? 'created' : 'created_verify', implode( '; ', $notices ) );
-		$entry['sku']        = $assigned;
+		$entry['sku']        = $sku;
 		$entry['product_id'] = (int) $product_id;
-		$entry['edit_url']   = get_edit_post_link( (int) $product_id, 'raw' );
+		$entry['edit_url']   = (string) get_edit_post_link( (int) $product_id, 'raw' );
 
 		return $entry;
+	}
+
+	/**
+	 * Report every row as failed because the SKU block could not be reserved.
+	 *
+	 * @param array<int, array<string, mixed>> $rows Input rows.
+	 * @param \Throwable                       $e    What went wrong.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function fail_all( array $rows, \Throwable $e ): array {
+		$reason = __( 'Another import is running — SKU sequence is locked. Try again in a moment.', 'bulk-list-import' );
+
+		if ( ! str_contains( $e->getMessage(), 'lock' ) ) {
+			/* translators: %s: error message. */
+			$reason = sprintf( __( 'Could not reserve SKUs: %s', 'bulk-list-import' ), $e->getMessage() );
+		}
+
+		$entries = array();
+
+		foreach ( $rows as $row ) {
+			$entries[] = $this->entry( $row, 'failed', $reason );
+		}
+
+		return $entries;
+	}
+
+	/**
+	 * Build a rejection plan.
+	 *
+	 * @param string $outcome Report outcome.
+	 * @param string $reason  Specific, human reason.
+	 * @return array<string, mixed>
+	 */
+	private function reject( string $outcome, string $reason ): array {
+		return array(
+			'action'  => 'reject',
+			'outcome' => $outcome,
+			'reason'  => $reason,
+		);
 	}
 
 	/**
@@ -186,6 +266,8 @@ class Importer {
 	 *
 	 * Called "variant", never "size" — the same field holds 70cl, 256GB, UK 9
 	 * and "50kg bag".
+	 *
+	 * @param string $value Variant text.
 	 */
 	private function variant_attribute( string $value ): \WC_Product_Attribute {
 		/**
