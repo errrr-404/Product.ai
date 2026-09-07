@@ -22,10 +22,12 @@
 		"test": [
 			"@test:parser",
 			"@test:validator",
-			"@test:policy"
+			"@test:policy",
+			"@test:prompts"
 		],
 		"test:parser": "php bulk-list-import/tests/test-parser-fixtures.php",
 		"test:validator": "php bulk-list-import/tests/test-response-validator.php",
-		"test:policy": "php bulk-list-import/tests/test-retry-policy.php"
+		"test:policy": "php bulk-list-import/tests/test-retry-policy.php",
+		"test:prompts": "php bulk-list-import/tests/test-prompt-builder.php"
 	}
 }

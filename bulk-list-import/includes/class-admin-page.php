@@ -88,7 +88,7 @@ class Admin_Page {
 	 * @param string $hook Current admin page hook suffix.
 	 */
 	public function enqueue( string $hook ): void {
-		if ( ! str_contains( $hook, self::SLUG ) && ! str_contains( $hook, self::REPORT_SLUG ) ) {
+		if ( ! str_contains( $hook, self::SLUG ) && ! str_contains( $hook, self::REPORT_SLUG ) && ! str_contains( $hook, Settings_Page::SLUG ) ) {
 			return;
 		}
 

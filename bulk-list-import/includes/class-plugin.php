@@ -38,6 +38,13 @@ final class Plugin {
 	private Admin_Page $admin_page;
 
 	/**
+	 * The settings screen.
+	 *
+	 * @var Settings_Page
+	 */
+	private Settings_Page $settings_page;
+
+	/**
 	 * Whether hooks have already been registered.
 	 *
 	 * @var bool
@@ -59,7 +66,8 @@ final class Plugin {
 	 * Private constructor — use instance().
 	 */
 	private function __construct() {
-		$this->admin_page = new Admin_Page();
+		$this->admin_page    = new Admin_Page();
+		$this->settings_page = new Settings_Page();
 	}
 
 	/**
@@ -74,6 +82,8 @@ final class Plugin {
 
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 		add_action( 'admin_menu', array( $this->admin_page, 'register_menu' ) );
+		add_action( 'admin_menu', array( $this->settings_page, 'register_menu' ) );
+		add_action( 'admin_init', array( $this->settings_page, 'register_settings' ) );
 		add_action( 'admin_enqueue_scripts', array( $this->admin_page, 'enqueue' ) );
 
 		// admin-post.php endpoints. Both are capability- and nonce-checked in the handler.

@@ -129,3 +129,10 @@
 	margin-left: 18px;
 	list-style: disc;
 }
+
+/* Settings ---------------------------------------------------------------- */
+
+.bli-warning-inline {
+	color: #674f00;
+	font-style: italic;
+}
