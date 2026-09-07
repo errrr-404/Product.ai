@@ -96,6 +96,14 @@ interface DescriptionProvider {
 ```
 
 - Ship with **Gemini** as the default implementation.
+- **Never hardcode a model name as the source of truth.** Google retired the
+  Flash tier twice in under five months and gives preview models about two weeks
+  of notice, so a pinned default does not go quietly stale — it starts returning
+  404 on installs nobody has touched. `list_models()` is on the provider
+  interface for this reason: the settings dropdown is populated from the
+  provider, cached 24h in a transient, with a short hardcoded list used only when
+  that call fails. A long stale fallback is worse than a short one, because more
+  of it is wrong.
 - Structure so OpenAI, Claude, and OpenRouter drop in without touching calling
   code.
 - Provider and model are a **user setting**, not a constant.
@@ -235,6 +243,21 @@ The gate should feel like a seatbelt, not a locked door.
   malformed output. Never write unvalidated model output to the database.
 - **Queue everything with Action Scheduler** (ships with WooCommerce). Do not
   hand-roll a cron loop.
+- **Action Scheduler does not retry failed actions.** When a job throws, it is
+  marked failed and that is the end of it — there is no built-in reschedule.
+  "The outer loop handles it" is therefore a thing this plugin must *build*, not
+  something the queue provides, and until it exists every retryable verdict
+  terminates a row permanently while the report implies otherwise. Implement it
+  explicitly: on a retryable failure, `as_schedule_single_action()` with backoff,
+  carrying an attempt counter, capped at `Retry_Policy::MAX_OUTER_ATTEMPTS`.
+  The report row needs an `attempts` column so the user can tell "failed once,
+  will retry" from "gave up after three".
+- **429 is not a 503.** A 503 clears in seconds; a rate limit on a free tier is a
+  per-minute or per-day quota, so re-asking inside one attempt window fails
+  identically and burns the attempt. Read `Retry-After`, let it override the
+  backoff schedule, and send the row straight to the outer loop without spending
+  an inner attempt. With 20 queued jobs against a free tier this is the most
+  common failure in testing, not an edge case.
 
   *Why a queue is mandatory, so nobody "simplifies" it away:* generation is not
   slow (~3–8s per description). PHP requests are short. Even 20 products × 5s =

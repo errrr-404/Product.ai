@@ -56,6 +56,31 @@ final class Retry_Policy {
 	public const ASSUMED_BUDGET = 60;
 
 	/**
+	 * Attempts in the outer loop, across separate Action Scheduler runs.
+	 *
+	 * Action Scheduler does **not** reschedule a failed action by itself — when a
+	 * job throws, it is marked failed and that is the end of it. The outer loop is
+	 * something this plugin has to build with as_schedule_single_action(), not
+	 * something the queue provides. Until it exists, every "retryable" verdict
+	 * below terminates the row permanently.
+	 */
+	public const MAX_OUTER_ATTEMPTS = 3;
+
+	/**
+	 * Outer-loop backoff, in seconds, by attempt number. Used only when the
+	 * provider gives no Retry-After of its own.
+	 *
+	 * @var int[]
+	 */
+	private const OUTER_BACKOFF = array( 60, 300, 900 );
+
+	/**
+	 * Floor on any delay, so a provider answering "retry after 0" cannot turn the
+	 * outer loop into a spin.
+	 */
+	private const MIN_DELAY = 5;
+
+	/**
 	 * Format failures: the JSON contract was never reached because the model did
 	 * not follow the output instruction. A second ask with a blunter instruction
 	 * usually lands, and costs the same as the first.
@@ -127,38 +152,47 @@ final class Retry_Policy {
 	 *
 	 * @var int[]
 	 */
-	private const RETRYABLE_STATUSES = array( 408, 425, 429, 500, 502, 503, 504 );
+	private const RETRYABLE_STATUSES = array( 408, 425, 500, 502, 503, 504 );
 
 	/**
 	 * Decide what to do about a validation failure.
 	 *
+	 * Applies to both passes. `classified` is deliberately not called `known`:
+	 * that word already means "the model recognises this product" in the
+	 * recognition pass, and an unclassified code surfacing during description
+	 * generation should read as "the policy has no entry for this", not as a
+	 * recognition verdict. A caller seeing classified:false should report the row
+	 * failed with an unrecognised-validator-code reason and log it.
+	 *
 	 * @param string $code Stable code from Invalid_Response_Exception.
-	 * @return array{retry: bool, lever: string, known: bool} lever is one of: none,
-	 *         format, contract, output_limit. known is false when the validator has
-	 *         raised a code this table has never heard of.
+	 * @return array{retry: bool, lever: string, lane: string, classified: bool}
+	 *         lever is one of: none, format, contract, output_limit.
 	 */
 	public function for_validation_code( string $code ): array {
 		if ( in_array( $code, self::CAPACITY_FAILURES, true ) ) {
 			return array(
-				'retry' => true,
-				'lever' => 'output_limit',
-				'known' => true,
+				'retry'      => true,
+				'lever'      => 'output_limit',
+				'lane'       => 'inner',
+				'classified' => true,
 			);
 		}
 
 		if ( in_array( $code, self::FORMAT_FAILURES, true ) ) {
 			return array(
-				'retry' => true,
-				'lever' => 'format',
-				'known' => true,
+				'retry'      => true,
+				'lever'      => 'format',
+				'lane'       => 'inner',
+				'classified' => true,
 			);
 		}
 
 		if ( in_array( $code, self::CONTRACT_FAILURES, true ) ) {
 			return array(
-				'retry' => true,
-				'lever' => 'contract',
-				'known' => true,
+				'retry'      => true,
+				'lever'      => 'contract',
+				'lane'       => 'inner',
+				'classified' => true,
 			);
 		}
 
@@ -168,23 +202,44 @@ final class Retry_Policy {
 		// been taught, and the caller can log that rather than let the omission
 		// sit unnoticed behind identical behaviour.
 		return array(
-			'retry' => false,
-			'lever' => 'none',
-			'known' => in_array( $code, self::TERMINAL_FAILURES, true ),
+			'retry'      => false,
+			'lever'      => 'none',
+			'lane'       => 'none',
+			'classified' => in_array( $code, self::TERMINAL_FAILURES, true ),
 		);
 	}
 
 	/**
 	 * Decide what to do about an HTTP status.
 	 *
+	 * Every HTTP failure that is worth another go belongs to the *outer* lane. The
+	 * inner loop exists for prompt-level failures, where a differently worded ask
+	 * fixes things instantly; infrastructure failures need time to pass, and time
+	 * is the one thing a single PHP request cannot spend.
+	 *
 	 * @param int $status HTTP status code.
-	 * @return array{retry: bool, code: string} code is a stable slug for the report.
+	 * @return array{retry: bool, code: string, lane: string} code is a stable slug
+	 *         for the report; lane is outer or none.
 	 */
 	public function for_http_status( int $status ): array {
+		// 429 is not a transient blip and does not belong with the 5xx bucket. A
+		// 503 clears in seconds; a rate limit on a free tier is a per-minute or
+		// per-day quota, and re-asking inside a 20s window fails identically while
+		// burning the one inner attempt. It gets its own code and its own delay,
+		// taken from the provider rather than guessed.
+		if ( 429 === $status ) {
+			return array(
+				'retry' => true,
+				'code'  => 'rate_limited',
+				'lane'  => 'outer',
+			);
+		}
+
 		if ( in_array( $status, self::RETRYABLE_STATUSES, true ) ) {
 			return array(
 				'retry' => true,
-				'code'  => 429 === $status ? 'rate_limited' : 'provider_unavailable',
+				'code'  => 'provider_unavailable',
+				'lane'  => 'outer',
 			);
 		}
 
@@ -192,18 +247,21 @@ final class Retry_Policy {
 			case 401:
 			case 403:
 				// Never retried: a rejected key is rejected identically next time,
-				// and the fix is in settings, not in this loop.
+				// and the fix is in settings, not in any loop.
 				return array(
 					'retry' => false,
 					'code'  => 'auth_failed',
+					'lane'  => 'none',
 				);
 
 			case 404:
-				// Overwhelmingly a wrong or retired model name. Worth its own code
-				// so the report can point at the setting rather than say "failed".
+				// Overwhelmingly a wrong or retired model name — and model names are
+				// retired often enough that this is a routine outcome, not an edge
+				// case. Its own code, so the report points at the setting.
 				return array(
 					'retry' => false,
 					'code'  => 'model_not_found',
+					'lane'  => 'none',
 				);
 
 			case 400:
@@ -211,13 +269,45 @@ final class Retry_Policy {
 				return array(
 					'retry' => false,
 					'code'  => 'request_rejected',
+					'lane'  => 'none',
 				);
 		}
 
 		return array(
 			'retry' => false,
 			'code'  => 'provider_error',
+			'lane'  => 'none',
 		);
+	}
+
+	/**
+	 * How long to wait before an outer-loop attempt.
+	 *
+	 * A provider-supplied Retry-After wins over our own schedule: it is the only
+	 * party that knows when the quota window rolls over, and guessing shorter just
+	 * spends an attempt to be told the same thing again.
+	 *
+	 * @param int $attempt     1-based outer attempt about to be scheduled.
+	 * @param int $retry_after Seconds from a Retry-After header, or 0.
+	 * @return int Seconds to wait.
+	 */
+	public function outer_delay( int $attempt, int $retry_after = 0 ): int {
+		if ( $retry_after > 0 ) {
+			return max( self::MIN_DELAY, $retry_after );
+		}
+
+		$index = max( 0, min( $attempt - 1, count( self::OUTER_BACKOFF ) - 1 ) );
+
+		return self::OUTER_BACKOFF[ $index ];
+	}
+
+	/**
+	 * Whether the outer loop has attempts left.
+	 *
+	 * @param int $attempt Attempts already made.
+	 */
+	public function has_outer_attempts_left( int $attempt ): bool {
+		return $attempt < self::MAX_OUTER_ATTEMPTS;
 	}
 
 	/**
@@ -248,8 +338,8 @@ final class Retry_Policy {
 	 * Whether another attempt fits in the time left.
 	 *
 	 * When it does not, the caller must fail the row as retryable rather than
-	 * start a call it cannot finish: Action Scheduler will run it again with a
-	 * fresh budget, which is the whole point of having an outer loop.
+	 * start a call it cannot finish. The outer loop then runs it again with a fresh
+	 * budget — once the outer loop exists to do so.
 	 *
 	 * @param int $remaining Seconds left in the budget.
 	 */

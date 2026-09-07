@@ -92,4 +92,16 @@ final class Fake_Provider implements Description_Provider {
 	public function id(): string {
 		return 'fake';
 	}
+
+	/**
+	 * A fixed pair, so a caller can be exercised without a network.
+	 *
+	 * @return array<string, string>
+	 */
+	public function list_models(): array {
+		return array(
+			'fake-model'      => 'Fake Model',
+			'fake-model-lite' => 'Fake Model Lite',
+		);
+	}
 }

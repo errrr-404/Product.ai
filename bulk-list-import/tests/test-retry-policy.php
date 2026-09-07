@@ -100,33 +100,68 @@ $report(
 // a reported failure, not as silent extra spend.
 $unknown = $policy->for_validation_code( 'some_code_added_next_year' );
 $report( false === $unknown['retry'], 'unknown validation code fails closed', 'got retry=true' );
-$report( false === $unknown['known'], 'unknown validation code is flagged as unknown' );
-$report( true === $policy->for_validation_code( 'empty_field' )['known'], 'a known terminal code is flagged as known' );
+$report( false === $unknown['classified'], 'unknown validation code is flagged unclassified' );
+$report( true === $policy->for_validation_code( 'empty_field' )['classified'], 'a known terminal code is flagged classified' );
 
 // ------------------------------------------------------------- HTTP statuses --
 
 $statuses = array(
-	429 => array( true, 'rate_limited' ),
-	503 => array( true, 'provider_unavailable' ),
-	500 => array( true, 'provider_unavailable' ),
-	504 => array( true, 'provider_unavailable' ),
-	408 => array( true, 'provider_unavailable' ),
-	401 => array( false, 'auth_failed' ),
-	403 => array( false, 'auth_failed' ),
-	404 => array( false, 'model_not_found' ),
-	400 => array( false, 'request_rejected' ),
-	418 => array( false, 'provider_error' ),
+	429 => array( true, 'rate_limited', 'outer' ),
+	503 => array( true, 'provider_unavailable', 'outer' ),
+	500 => array( true, 'provider_unavailable', 'outer' ),
+	504 => array( true, 'provider_unavailable', 'outer' ),
+	408 => array( true, 'provider_unavailable', 'outer' ),
+	401 => array( false, 'auth_failed', 'none' ),
+	403 => array( false, 'auth_failed', 'none' ),
+	404 => array( false, 'model_not_found', 'none' ),
+	400 => array( false, 'request_rejected', 'none' ),
+	418 => array( false, 'provider_error', 'none' ),
 );
 
 foreach ( $statuses as $http_status => $want ) {
 	$got = $policy->for_http_status( $http_status );
 
 	$report(
-		$got['retry'] === $want[0] && $got['code'] === $want[1],
-		sprintf( 'HTTP %d -> retry=%s code=%s', $http_status, $want[0] ? 'true' : 'false', $want[1] ),
-		sprintf( 'got retry=%s code=%s', $got['retry'] ? 'true' : 'false', $got['code'] )
+		$got['retry'] === $want[0] && $got['code'] === $want[1] && $got['lane'] === $want[2],
+		sprintf( 'HTTP %d -> retry=%s code=%s lane=%s', $http_status, $want[0] ? 'true' : 'false', $want[1], $want[2] ),
+		sprintf( 'got retry=%s code=%s lane=%s', $got['retry'] ? 'true' : 'false', $got['code'], $got['lane'] )
 	);
 }
+
+// 429 must not share a code with the 5xx bucket. A 503 clears in seconds; a rate
+// limit is a quota window, and re-asking inside a 20s attempt fails identically
+// while burning the one inner attempt.
+$report(
+	$policy->for_http_status( 429 )['code'] !== $policy->for_http_status( 503 )['code'],
+	'429 does not share a code with 503'
+);
+
+// Every HTTP failure worth retrying belongs to the outer lane. The inner loop is
+// for prompt-level failures, where a reworded ask fixes things instantly;
+// infrastructure failures need time, which one PHP request cannot spend.
+foreach ( array( 429, 500, 503, 504 ) as $retryable_status ) {
+	$report(
+		'outer' === $policy->for_http_status( $retryable_status )['lane'],
+		sprintf( 'HTTP %d is handled by the outer loop, not an inner retry', $retryable_status )
+	);
+}
+
+// Validation failures go the other way.
+$report( 'inner' === $policy->for_validation_code( 'ambiguous_json' )['lane'], 'validation failures use the inner lane' );
+
+// ------------------------------------------------------------- outer backoff --
+
+// A provider-supplied Retry-After wins: it is the only party that knows when the
+// quota window rolls over, and guessing shorter spends an attempt to be told the
+// same thing again.
+$report( 90 === $policy->outer_delay( 1, 90 ), 'Retry-After overrides the backoff schedule', 'got ' . $policy->outer_delay( 1, 90 ) );
+$report( 60 === $policy->outer_delay( 1 ), 'first outer attempt without Retry-After waits 60s', 'got ' . $policy->outer_delay( 1 ) );
+$report( 900 === $policy->outer_delay( 3 ), 'third outer attempt backs off to 900s', 'got ' . $policy->outer_delay( 3 ) );
+$report( 900 === $policy->outer_delay( 99 ), 'backoff is clamped, not indexed past the end', 'got ' . $policy->outer_delay( 99 ) );
+$report( 5 === $policy->outer_delay( 1, 1 ), 'a tiny Retry-After is floored so the loop cannot spin', 'got ' . $policy->outer_delay( 1, 1 ) );
+
+$report( true === $policy->has_outer_attempts_left( 2 ), 'a third outer attempt is allowed' );
+$report( false === $policy->has_outer_attempts_left( 3 ), 'a fourth outer attempt is not' );
 
 // ---------------------------------------------------------------- time budget --
 
@@ -168,7 +203,7 @@ $report(
 
 // Authenticated: a tampered payload must fail loudly, not decrypt to rubbish.
 // This is the property openssl_encrypt would not have given us for free.
-$tampered                      = Secret_Box::encrypt( $secret, $key );
+$tampered = Secret_Box::encrypt( $secret, $key );
 // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- flipping a byte to prove the payload is authenticated.
 $bytes                         = base64_decode( $tampered, true );
 $bytes[ strlen( $bytes ) - 1 ] = chr( ord( $bytes[ strlen( $bytes ) - 1 ] ) ^ 0x01 );

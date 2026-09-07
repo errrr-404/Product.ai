@@ -74,4 +74,19 @@ interface Description_Provider {
 	 * part of the recognition cache key.
 	 */
 	public function id(): string;
+
+	/**
+	 * Models this key may use, for the settings dropdown.
+	 *
+	 * On the seam rather than inside one provider because the problem is not
+	 * Gemini's: model names are versioned and retired on every vendor's own
+	 * schedule, so any hardcoded list rots and users hit 404s on a plugin they
+	 * never touched. Asking the provider is the only version that stays true.
+	 *
+	 * Callers are expected to cache the result.
+	 *
+	 * @return array<string, string> Model id => human label.
+	 * @throws Provider_Exception If the list cannot be fetched.
+	 */
+	public function list_models(): array;
 }

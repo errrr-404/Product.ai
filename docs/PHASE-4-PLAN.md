@@ -42,6 +42,8 @@ same property as the parser suite.
 ## 4c — Settings screen
 
 - Provider, model, industry, tone, description length, custom prompt template.
+- **Model dropdown populated from `list_models()`**, cached 24h in a transient,
+  falling back to the provider's short hardcoded list when the call fails.
 - WP Settings API, `register_setting` with sanitize callbacks.
 - Entire AI section behind `bli_is_pro()`.
 
@@ -70,6 +72,13 @@ same property as the parser suite.
 - Action Scheduler, **one row per job**, each carrying its pre-assigned SKU.
 - SKUs reserved once at enqueue time.
 - Report rows written incrementally, so closing the tab loses nothing.
+- **Build the outer retry loop.** Action Scheduler does not reschedule failed
+  actions, so a retryable verdict currently ends the row. On retryable failure:
+  `as_schedule_single_action()` at `Retry_Policy::outer_delay()`, carrying an
+  attempt counter, stopping at `MAX_OUTER_ATTEMPTS`. A `Retry-After` from the
+  provider overrides the schedule.
+- Report rows gain an `attempts` column: "failed once, will retry" and "gave up
+  after three" are different states and the user has to tell them apart.
 
 ## 4f — Field-level uncertainty
 
@@ -101,6 +110,10 @@ mid-phase.
   parallelism. Wall-clock proportional to row count is fine — nobody is watching.
 - **Reserve SKUs at enqueue, never inside a job.** A lock held across generation
   is a lock held for minutes.
+- **The outer retry loop is ours to build.** Action Scheduler marks a throwing
+  action failed and stops. Do not write code, or comments, that assume otherwise.
+- **Model names come from `list_models()`, not from a constant.** The hardcoded
+  pair is a fallback for when that call fails, nothing more.
 - **Never write unvalidated model output.** Shape-check first, every time.
 - **Draft status always.** Auto-publish is not a Phase 4 feature.
 - **Every input row appears in the report.** Including the ones the gate blocked

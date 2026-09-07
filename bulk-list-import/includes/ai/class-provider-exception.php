@@ -34,22 +34,43 @@ class Provider_Exception extends \RuntimeException {
 	/**
 	 * Whether retrying the same call could plausibly succeed.
 	 *
+	 * Retryable means "worth scheduling again", not "will be retried". Action
+	 * Scheduler does not reschedule failed actions on its own, so something has to
+	 * act on this flag — see Retry_Policy::MAX_OUTER_ATTEMPTS.
+	 *
 	 * @var bool
 	 */
 	private bool $retryable;
 
 	/**
+	 * Seconds the provider asked us to wait, from a Retry-After header. Zero when
+	 * it said nothing.
+	 *
+	 * @var int
+	 */
+	private int $retry_after;
+
+	/**
 	 * Build the exception.
 	 *
-	 * @param string $code_slug Stable machine code.
-	 * @param string $message   Developer-facing description.
-	 * @param bool   $retryable Whether a retry could plausibly succeed.
+	 * @param string $code_slug   Stable machine code.
+	 * @param string $message     Developer-facing description.
+	 * @param bool   $retryable   Whether a retry could plausibly succeed.
+	 * @param int    $retry_after Seconds requested by the provider, or 0.
 	 */
-	public function __construct( string $code_slug, string $message, bool $retryable = false ) {
+	public function __construct( string $code_slug, string $message, bool $retryable = false, int $retry_after = 0 ) {
 		parent::__construct( $message );
 
-		$this->code_slug = $code_slug;
-		$this->retryable = $retryable;
+		$this->code_slug   = $code_slug;
+		$this->retryable   = $retryable;
+		$this->retry_after = max( 0, $retry_after );
+	}
+
+	/**
+	 * Seconds the provider asked us to wait, or 0.
+	 */
+	public function retry_after(): int {
+		return $this->retry_after;
 	}
 
 	/**

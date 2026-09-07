@@ -32,12 +32,37 @@ final class Gemini_Provider implements Description_Provider {
 	/**
 	 * Default model.
 	 *
-	 * Model names are versioned and retired on Google's schedule, not ours, which
-	 * is exactly why this is a user setting rather than a constant. A stale name
-	 * surfaces as HTTP 404, which Retry_Policy maps to model_not_found so the
-	 * report can point at the setting instead of saying "failed".
+	 * Model names are versioned and retired on Google's schedule, not ours. The
+	 * Flash tier has been retired twice in under five months, and preview models
+	 * get about two weeks of notice — so a hardcoded default does not merely go
+	 * stale, it starts returning 404 on installs nobody has touched.
+	 *
+	 * These constants are therefore a *fallback*, used only when ListModels cannot
+	 * be reached. The settings screen populates its dropdown from the provider so
+	 * the live list is the source of truth.
 	 */
-	public const DEFAULT_MODEL = 'gemini-2.0-flash';
+	public const DEFAULT_MODEL = 'gemini-3.5-flash';
+
+	/**
+	 * Cheaper fallback option, for high-volume imports.
+	 */
+	public const ECONOMY_MODEL = 'gemini-3.1-flash-lite';
+
+	/**
+	 * Models offered when ListModels is unreachable. Deliberately short: a long
+	 * stale list is worse than a short one, because more of it is wrong.
+	 *
+	 * @var array<string, string>
+	 */
+	public const FALLBACK_MODELS = array(
+		self::DEFAULT_MODEL => 'Gemini 3.5 Flash',
+		self::ECONOMY_MODEL => 'Gemini 3.1 Flash Lite',
+	);
+
+	/**
+	 * Endpoint listing the models this key may use.
+	 */
+	private const MODELS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 	/**
 	 * Output token ceiling for a first attempt.
@@ -174,9 +199,10 @@ final class Gemini_Provider implements Description_Provider {
 			$remaining = $budget - (int) ceil( microtime( true ) - $started );
 
 			if ( ! $this->policy->can_attempt_within( $remaining ) ) {
-				// Out of clock. Fail as retryable so Action Scheduler runs this row
-				// again with a fresh budget, rather than starting a call that PHP
-				// will kill before the outcome can be recorded.
+				// Out of clock. Fail as retryable rather than start a call that PHP
+				// will kill before the outcome can be recorded. Acting on that flag is
+				// the outer loop's job, and the outer loop has to be built — Action
+				// Scheduler will not reschedule this by itself.
 				throw new Provider_Exception(
 					'out_of_time',
 					'Not enough time left in this request to attempt the call.',
@@ -292,11 +318,120 @@ final class Gemini_Provider implements Description_Provider {
 			throw new Provider_Exception(
 				$decision['code'],
 				sprintf( 'Provider returned HTTP %d.', $status ),
-				$decision['retry']
+				$decision['retry'],
+				$this->retry_after( $response )
 			);
 		}
 
 		return $this->extract_text( $raw );
+	}
+
+	/**
+	 * Seconds the provider asked us to wait, from a Retry-After header.
+	 *
+	 * The header is either a number of seconds or an HTTP date; both are in the
+	 * wild. A value we cannot read is reported as 0 so the caller falls back to
+	 * its own schedule rather than treating an unparsed header as "retry now".
+	 *
+	 * @param array<string, mixed>|\WP_Error $response Raw wp_remote_post result.
+	 */
+	private function retry_after( $response ): int {
+		$header = trim( (string) wp_remote_retrieve_header( $response, 'retry-after' ) );
+
+		if ( '' === $header ) {
+			return 0;
+		}
+
+		if ( ctype_digit( $header ) ) {
+			return (int) $header;
+		}
+
+		$at = strtotime( $header );
+
+		if ( false === $at ) {
+			return 0;
+		}
+
+		return max( 0, $at - time() );
+	}
+
+	/**
+	 * Models this key may use, for the settings dropdown.
+	 *
+	 * Asking the provider is what stops a hardcoded list from rotting. Callers are
+	 * expected to cache this — it is one HTTP round trip, and the answer changes
+	 * on Google's release schedule, not on page load.
+	 *
+	 * @return array<string, string> Model id => human label, sorted by id.
+	 * @throws Provider_Exception If the list cannot be fetched or parsed.
+	 */
+	public function list_models(): array {
+		$response = wp_remote_get(
+			self::MODELS_ENDPOINT,
+			array(
+				'timeout' => 10,
+				'headers' => array( 'x-goog-api-key' => $this->api_key ),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			throw new Provider_Exception( 'transport_error', $response->get_error_message(), true );
+		}
+
+		$status = (int) wp_remote_retrieve_response_code( $response );
+
+		if ( $status < 200 || $status >= 300 ) {
+			$decision = $this->policy->for_http_status( $status );
+
+			throw new Provider_Exception(
+				$decision['code'],
+				sprintf( 'Provider returned HTTP %d listing models.', $status ),
+				$decision['retry'],
+				$this->retry_after( $response )
+			);
+		}
+
+		$decoded = json_decode( (string) wp_remote_retrieve_body( $response ), true );
+
+		if ( ! is_array( $decoded ) || ! isset( $decoded['models'] ) || ! is_array( $decoded['models'] ) ) {
+			throw new Provider_Exception( 'provider_error', 'Model list response was not in the expected shape.' );
+		}
+
+		$models = array();
+
+		foreach ( $decoded['models'] as $model ) {
+			if ( ! is_array( $model ) || ! isset( $model['name'] ) || ! is_string( $model['name'] ) ) {
+				continue;
+			}
+
+			// Only models that can actually answer a generateContent call. Embedding
+			// and tuning models are listed here too and would be dead options.
+			$methods = $model['supportedGenerationMethods'] ?? array();
+
+			if ( is_array( $methods ) && array() !== $methods && ! in_array( 'generateContent', $methods, true ) ) {
+				continue;
+			}
+
+			$id = preg_replace( '#^models/#', '', $model['name'] );
+
+			if ( ! is_string( $id ) || '' === $id ) {
+				continue;
+			}
+
+			$label = isset( $model['displayName'] ) && is_string( $model['displayName'] ) && '' !== $model['displayName']
+				? $model['displayName']
+				: $id;
+
+			$models[ $id ] = $label;
+		}
+
+		if ( array() === $models ) {
+			throw new Provider_Exception( 'provider_error', 'Provider listed no usable models.' );
+		}
+
+		ksort( $models );
+
+		return $models;
 	}
 
 	/**
