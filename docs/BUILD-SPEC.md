@@ -58,9 +58,16 @@ bulk-list-import/
 │   ├── class-sku-generator.php   # MAX(sku) in PHP, never COUNT(products)
 │   ├── class-importer.php        # WC_Product_Simple creation
 │   ├── class-import-report.php   # post-import review screen
-│   └── class-admin-page.php      # paste form + preview table
+│   ├── class-admin-page.php      # paste form + preview table
+│   └── ai/                       # namespace BulkListImport\AI
+│       ├── interface-description-provider.php
+│       ├── class-prompt-builder.php
+│       ├── class-response-validator.php   # the only door to the database
+│       └── class-gemini-provider.php
 ├── tests/
-│   └── test-parser-fixtures.php
+│   ├── test-parser-fixtures.php
+│   ├── test-response-validator.php
+│   └── fixtures/                 # golden JSON, recorded and hand-broken
 └── assets/
     ├── admin.css
     └── admin.js              # select-all + batch warning; plain JS, no build step
@@ -209,8 +216,21 @@ The gate should feel like a seatbelt, not a locked door.
 
 - **API keys never touch the browser.** Server-side only, via
   `wp_remote_post()`. Not cURL, not Guzzle.
-- Store the key encrypted in `wp_options`, or allow a constant in
-  `wp-config.php`.
+- **API key storage, and what it actually protects.** WordPress has no key
+  management: anything encrypted with a key derived from the salts is defeated
+  by the same filesystem access that reveals `wp-config.php`. What it does stop
+  is a database-only compromise — SQL injection, a leaked backup, a shared
+  staging dump — which is the common case. So:
+  - Preferred: a constant in `wp-config.php`. Never reaches the database.
+  - Fallback: `sodium_crypto_secretbox`, keyed off the WordPress salts.
+    Authenticated encryption, no IV-reuse footgun, and WordPress bundles
+    `sodium_compat`, so libsodium is guaranteed on every install — no
+    `function_exists()` branch, no untested fallback path.
+  - Never say "encrypted" unqualified in the UI. Say: *"Stored encrypted in your
+    database. This protects against database leaks and backup exposure, but not
+    against filesystem access. For strongest protection, define
+    `BLI_GEMINI_API_KEY` in `wp-config.php`."*
+  - The key is never rendered back to the browser. Masked placeholder, writes only.
 - **Prompt for JSON. Validate the shape before writing anything.** Retry on
   malformed output. Never write unvalidated model output to the database.
 - **Queue everything with Action Scheduler** (ships with WooCommerce). Do not
@@ -225,9 +245,23 @@ The gate should feel like a seatbelt, not a locked door.
   duplicates. A queue keeps each run inside the limit, survives tab closure, and
   makes a failure at product #14 one retryable job instead of wreckage.
 
+- **One row per description job.** `wp_remote_post()` is strictly blocking, so
+  concurrent calls inside one PHP request are not possible without abandoning it
+  — and an earlier draft of this spec asked for both, which cannot hold. The
+  requirement was never concurrency. It was *don't time out, and be resumable*,
+  and one row per job delivers that on its own: a single call of 3–8s sits
+  comfortably inside any `max_execution_time`, and a failure at row #14 is one
+  retryable job. Action Scheduler defaults to a single concurrent batch, so
+  parallelism across jobs is not guaranteed either; do not design as though it
+  were. Wall-clock time proportional to row count is fine. Nobody is watching
+  the page — that is the whole point of the queue.
+- **SKUs are reserved once, at enqueue time.** Each queued job carries its
+  pre-assigned SKU. Reserving inside a job would reintroduce exactly the lock
+  contention the reservation model removed: a lock held across AI generation is
+  a lock held for minutes, blocking every other import on the site. See
+  `SKU_Generator::reserve()`.
 - Batch sizes: **20 products per import by default** (user-editable), ~20 names
-  per recognition call, 3–5 concurrent description calls, 10–20 jobs per Action
-  Scheduler run.
+  per recognition call, 10–20 jobs per Action Scheduler run.
 - Show a **live token estimate** before the user commits (~650 tokens/product).
 
 ---
@@ -256,8 +290,17 @@ tokens being spent on a product that was never going to work.
   details panel as the gate; created-but-uncertain rows link to the edit screen.
 - **Field-level warnings surface here too.** A product can be created and still
   carry `uncertain_fields` — that becomes a "verify" state, not a silent pass.
-- **Persist it.** Store against the import job so the user can close the tab and
-  come back. Keep the last 10.
+- **Persist it in custom tables**, `{prefix}bli_imports` and
+  `{prefix}bli_import_rows`, one row per input line. Not a serialised option.
+  Once generation is queued, each job updates one row's outcome, and concurrent
+  read-modify-write on a single option **silently loses updates** — which is the
+  "a row vanished" failure this screen exists to prevent, reintroduced by its own
+  storage. Size seals it: batch size is user-editable and the last 10 imports are
+  kept, so that is thousands of rows in one blob.
+  - Gate `dbDelta` behind a schema version in an option. Do not migrate on every load.
+  - Register an uninstall hook that `DROP`s both tables. WordPress.org reviewers
+    check for this.
+- Keep the last 10 imports so the user can close the tab and come back.
 - **Exportable** (CSV) so the "needs attention" list can be handed to someone
   else. Guard against formula injection: prefix cells starting with `= + - @`.
 
@@ -284,6 +327,13 @@ It is a core feature, not error-handling polish.
 - **PHP 8.0+**, `declare( strict_types = 1 );` in every file
 - Namespace `BulkListImport`, function prefix `bli_`, text domain
   `bulk-list-import`
+- **Autoloading is convention, not configuration.** The autoloader maps a
+  fully-qualified name to a file by lowercasing and hyphenating it: sub-namespace
+  segments become directories, `Foo_Bar` becomes `class-foo-bar.php`, and a name
+  ending in `_Interface` or declared as one becomes `interface-*.php` per WPCS
+  file-naming rules. So `BulkListImport\AI\Gemini_Provider` lives at
+  `includes/ai/class-gemini-provider.php`. Adding a directory needs no
+  registration; adding a *naming* pattern does.
 - `if ( ! defined( 'ABSPATH' ) ) { exit; }` at the top of every PHP file
 - **Security is non-negotiable** — the top rejection reason for the WordPress.org
   repo:

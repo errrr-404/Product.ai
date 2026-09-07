@@ -1,0 +1,83 @@
+{
+  "_comment": [
+    "Adversarial test set for the recognition gate (pass 1). Gate on 4f.",
+    "",
+    "This is a LIVE-API test, run manually against the configured provider and",
+    "model, because it measures the model's behaviour rather than our code. Record",
+    "the result — provider, model, date, pass/fail per case — in the commit message",
+    "of whatever change it was run against.",
+    "",
+    "The two groups catch different failures, and the second is the one that",
+    "actually reaches production. A model that refuses everything passes group one",
+    "and is useless; a model that is confidently wrong passes neither."
+  ],
+
+  "must_not_recognise": {
+    "_comment": [
+      "Products the model demonstrably fabricated descriptions for during the",
+      "original manual catalogue work. It has no real knowledge of these.",
+      "",
+      "REQUIRED: known == false.",
+      "Any known:true here is a HARD FAIL — the gate is broken, and the failure it",
+      "was built to stop is happening. Do not ship 4f with a hard fail outstanding.",
+      "",
+      "Note that several of these are ordinary-looking names. That is the point:",
+      "'Element' is also a legitimate single-word product name in the parser",
+      "fixtures, and the model must decline it on knowledge, not on shape."
+    ],
+    "cases": [
+      { "name": "Cape More", "known": false },
+      { "name": "Agor Red Wine", "known": false },
+      { "name": "Declan White Wine", "known": false },
+      { "name": "Salamanca Blanco", "known": false },
+      { "name": "Element", "known": false },
+      { "name": "All Season", "known": false }
+    ]
+  },
+
+  "must_hedge": {
+    "_comment": [
+      "Brand recognised, specifics fabricated. This is the harder failure mode:",
+      "known:false does not catch it, because the model genuinely does know the",
+      "brand and the product line. What it does not know is the specific fact —",
+      "and left unhedged it will state one anyway, fluently.",
+      "",
+      "REQUIRED: known == true AND uncertain_fields is non-empty.",
+      "known:true with an empty uncertain_fields on any of these means the hedging",
+      "is not working. Treat that as a failure even though nothing looks wrong:",
+      "the output will be confident, plausible, and unverifiable.",
+      "",
+      "expect_uncertain lists the field we know the model tends to invent. It is",
+      "guidance for the reviewer, not a strict assertion — a model that hedges a",
+      "different but genuinely uncertain field is behaving correctly. The strict",
+      "assertion is only that the list is not empty."
+    ],
+    "cases": [
+      {
+        "name": "Glenfiddich Perpetual Collection Vat 03",
+        "known": true,
+        "expect_uncertain": [ "cask type" ]
+      },
+      {
+        "name": "Volcán Añejo D.M.",
+        "known": true,
+        "expect_uncertain": [ "finish", "maturation period" ]
+      },
+      {
+        "name": "Don Julio 1942",
+        "known": true,
+        "expect_uncertain": [ "abv" ]
+      }
+    ]
+  },
+
+  "_scope_note": [
+    "Every case here is a drink, because these are the real products that were",
+    "fabricated during the source catalogue work — this is evidence, not scope.",
+    "The gate is category-agnostic like everything else in the plugin. The general",
+    "form of the second group, in any industry, is a spec, measurement, material,",
+    "certification, or compatibility claim invented for a product line the model",
+    "knows only in outline. If you have a verified fabrication from another",
+    "category, add it — same workflow as the parser fixtures."
+  ]
+}
