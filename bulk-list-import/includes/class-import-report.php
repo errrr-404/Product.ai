@@ -233,9 +233,11 @@ class Import_Report {
 				echo ' <span class="bli-variant">' . esc_html( $variant ) . '</span>';
 			}
 			echo '</td>';
-			echo '<td>' . esc_html( '' !== (string) $entry['sku'] ? (string) $entry['sku'] : '—' ) . '</td>';
+			$sku = (string) ( $entry['sku'] ?? '' );
+			echo '<td>' . esc_html( '' !== $sku ? $sku : '—' ) . '</td>';
 			echo '<td><span class="bli-badge bli-badge--' . esc_attr( $modifier ) . '">' . esc_html( $label ) . '</span></td>';
-			echo '<td>' . esc_html( '' !== (string) $entry['reason'] ? (string) $entry['reason'] : '—' ) . '</td>';
+			$reason = (string) ( $entry['reason'] ?? '' );
+			echo '<td>' . esc_html( '' !== $reason ? $reason : '—' ) . '</td>';
 			echo '<td>';
 
 			if ( ! empty( $entry['edit_url'] ) ) {
@@ -299,6 +301,25 @@ class Import_Report {
 	}
 
 	/**
+	 * Neutralise a CSV cell that a spreadsheet would execute as a formula.
+	 *
+	 * Excel, LibreOffice and Google Sheets treat a cell beginning with =, +, -
+	 * or @ as a formula, and strip a leading tab or carriage return before
+	 * deciding. Every text column in this report carries whatever the user
+	 * pasted, so it can begin with any of them. A leading apostrophe tells all
+	 * three "the rest is literal text" and is not shown to the reader.
+	 *
+	 * @param string $value Raw cell value.
+	 */
+	private static function csv_cell( string $value ): string {
+		if ( '' !== $value && 1 === preg_match( '/^[=+\-@\t\r]/', $value ) ) {
+			return "'" . $value;
+		}
+
+		return $value;
+	}
+
+	/**
 	 * Stream a report as CSV. Pro only.
 	 */
 	public static function export_csv(): void {
@@ -321,7 +342,9 @@ class Import_Report {
 
 		nocache_headers();
 		header( 'Content-Type: text/csv; charset=utf-8' );
-		header( 'Content-Disposition: attachment; filename=bulk-list-import-' . $id . '.csv' );
+		// Filename comes from the stored report, never straight from the request.
+		$filename = sanitize_file_name( 'bulk-list-import-' . (string) $report['id'] . '.csv' );
+		header( 'Content-Disposition: attachment; filename=' . $filename );
 
 		$out = fopen( 'php://output', 'w' );
 		fputcsv( $out, array( 'Row', 'Product', 'Variant', 'SKU', 'Outcome', 'Reason', 'Raw line' ) );
@@ -331,13 +354,13 @@ class Import_Report {
 			fputcsv(
 				$out,
 				array(
-					(string) ( $entry['line'] ?? '' ),
-					(string) ( $entry['name'] ?? '' ),
-					(string) ( $entry['variant'] ?? '' ),
-					(string) ( $entry['sku'] ?? '' ),
-					$label,
-					(string) ( $entry['reason'] ?? '' ),
-					(string) ( $entry['raw'] ?? '' ),
+					self::csv_cell( (string) ( $entry['line'] ?? '' ) ),
+					self::csv_cell( (string) ( $entry['name'] ?? '' ) ),
+					self::csv_cell( (string) ( $entry['variant'] ?? '' ) ),
+					self::csv_cell( (string) ( $entry['sku'] ?? '' ) ),
+					self::csv_cell( $label ),
+					self::csv_cell( (string) ( $entry['reason'] ?? '' ) ),
+					self::csv_cell( (string) ( $entry['raw'] ?? '' ) ),
 				)
 			);
 		}
