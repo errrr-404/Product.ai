@@ -26,11 +26,12 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          # The suites are deliberately free of WordPress, so they need no
-          # extension beyond what ships by default. mbstring is listed because
-          # its absence is the kind of thing that should fail loudly here rather
-          # than on someone's shared host.
-          extensions: mbstring
+          # sodium is what makes this matrix enforce the crypto, not just the
+          # PHP floor: Secret_Box has no function_exists() branch, so without
+          # the extension its suite would skip and the encryption path would
+          # ship untested. WordPress bundles sodium_compat at runtime, but CI
+          # gets the real extension.
+          extensions: mbstring, sodium
           coverage: none
 
       # The suites load their own classes and need no autoloader, so dev

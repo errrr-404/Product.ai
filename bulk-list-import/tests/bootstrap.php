@@ -22,5 +22,7 @@ require_once __DIR__ . '/../includes/ai/class-invalid-response-exception.php';
 require_once __DIR__ . '/../includes/ai/class-response-validator.php';
 require_once __DIR__ . '/../includes/ai/class-prompt-builder.php';
 require_once __DIR__ . '/../includes/ai/class-provider-exception.php';
+require_once __DIR__ . '/../includes/ai/class-retry-policy.php';
+require_once __DIR__ . '/../includes/ai/class-secret-box.php';
 require_once __DIR__ . '/../includes/ai/interface-description-provider.php';
 require_once __DIR__ . '/class-fake-provider.php';
