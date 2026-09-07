@@ -82,7 +82,7 @@ final class Plugin {
 	 * @return array<int, string>
 	 */
 	public function action_links( array $links ): array {
-		$url = admin_url( 'admin.php?page=' . Admin_Page::SLUG );
+		$url = Admin_Page::url();
 
 		array_unshift(
 			$links,

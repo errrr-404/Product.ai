@@ -37,6 +37,11 @@ Concretely:
 | 4 | AI layer: recognition gate + SEO generation, queued | next |
 | 5 | Hardening: errors, retries, rate limits, i18n, security audit | pending |
 
+**Minimum WordPress version is 6.2, and largely decorative.** WooCommerce is a
+hard dependency and its own minimum WordPress version is higher, so that is the
+effective floor. The figure still has to be honest: declaring 6.0 promises
+support we cannot deliver. Keep the plugin header and `README.md` in step.
+
 Phases 1–3 ship a useful plugin with zero AI. That is intentional — get real
 feedback on the foundation before taking on the hard part.
 
@@ -56,7 +61,9 @@ bulk-list-import/
 │   └── class-admin-page.php      # paste form + preview table
 ├── tests/
 │   └── test-parser-fixtures.php
-└── assets/admin.css
+└── assets/
+    ├── admin.css
+    └── admin.js              # select-all + batch warning; plain JS, no build step
 ```
 
 ---
@@ -356,5 +363,16 @@ Patrón Silver     /  Patron Silver
   digits. Headers are **flagged, never silently deleted.**
 - **Rows with no unit are normal** and must score full confidence when name and
   price are present.
-- Duplicate normalisation must run `remove_accents()` before ASCII-stripping,
-  or accented and unaccented spellings of the same product both import.
+- Duplicate normalisation folds accents to ASCII **before** stripping
+  non-alphanumerics, or accented and unaccented spellings of the same product
+  both import. The other order deletes accented characters outright, so
+  "Rémy Martin" would key as `rmymartin` and never match "Remy Martin".
+- The parser owns its own folding table (Latin-1 Supplement + Latin Extended-A)
+  and does **not** call `remove_accents()`, not even behind a
+  `function_exists()` check. `class-parser.php` is deliberately free of every
+  WordPress function, which is what lets `tests/test-parser-fixtures.php` run
+  standalone — no WordPress boot, no database, milliseconds per run. A
+  conditional branch would be worse than no folding at all: tests would
+  exercise the fallback while production exercised `remove_accents()`, so the
+  shipping path would never be the tested path and drift between them would
+  surface only as a duplicate slipping through in a real store.

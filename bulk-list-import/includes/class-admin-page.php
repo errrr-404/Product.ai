@@ -22,7 +22,35 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Admin_Page {
 
 	public const SLUG               = 'bulk-list-import';
+	public const REPORT_SLUG        = 'bli-import-report';
 	public const DEFAULT_BATCH_SIZE = 20;
+
+	/**
+	 * Admin menu parent.
+	 *
+	 * Products, not WooCommerce: WooCommerce's own CSV product importer lives
+	 * here, and the WooCommerce menu is for orders, settings and reports. This
+	 * also decides the page URL — a submenu registered under a parent other than
+	 * admin.php is served by that parent file, so `admin.php?page=…` would 404
+	 * with a permissions error. Always build links with url() below.
+	 */
+	public const PARENT = 'edit.php?post_type=product';
+
+	/**
+	 * Build an admin URL for one of this plugin's screens.
+	 *
+	 * @param string $page  Page slug.
+	 * @param string $query Extra query string, already encoded, without a leading "&".
+	 */
+	public static function url( string $page = self::SLUG, string $query = '' ): string {
+		$url = self::PARENT . '&page=' . $page;
+
+		if ( '' !== $query ) {
+			$url .= '&' . $query;
+		}
+
+		return admin_url( $url );
+	}
 
 	/**
 	 * Flags the preview form is allowed to round-trip back to us.
@@ -36,7 +64,7 @@ class Admin_Page {
 	 */
 	public function register_menu(): void {
 		add_submenu_page(
-			'woocommerce',
+			self::PARENT,
 			__( 'Bulk List Import', 'bulk-list-import' ),
 			__( 'Bulk List Import', 'bulk-list-import' ),
 			'manage_woocommerce',
@@ -45,11 +73,11 @@ class Admin_Page {
 		);
 
 		add_submenu_page(
-			'woocommerce',
+			self::PARENT,
 			__( 'Import Report', 'bulk-list-import' ),
 			__( 'Import Report', 'bulk-list-import' ),
 			'manage_woocommerce',
-			'bli-import-report',
+			self::REPORT_SLUG,
 			array( Import_Report::class, 'render_page' )
 		);
 	}
@@ -60,7 +88,7 @@ class Admin_Page {
 	 * @param string $hook Current admin page hook suffix.
 	 */
 	public function enqueue( string $hook ): void {
-		if ( ! str_contains( $hook, self::SLUG ) && ! str_contains( $hook, 'bli-import-report' ) ) {
+		if ( ! str_contains( $hook, self::SLUG ) && ! str_contains( $hook, self::REPORT_SLUG ) ) {
 			return;
 		}
 
@@ -301,7 +329,7 @@ class Admin_Page {
 			. esc_html__( 'Products are created as drafts and tagged needs-review. Nothing is published.', 'bulk-list-import' )
 			. '</p>';
 		submit_button( __( 'Import selected products', 'bulk-list-import' ), 'primary', 'submit', false, array( 'id' => 'bli-import-button' ) );
-		echo ' <a class="button" href="' . esc_url( admin_url( 'admin.php?page=' . self::SLUG ) ) . '">'
+		echo ' <a class="button" href="' . esc_url( self::url() ) . '">'
 			. esc_html__( 'Start over', 'bulk-list-import' ) . '</a>';
 		echo '</div>';
 
@@ -396,14 +424,14 @@ class Admin_Page {
 		}
 
 		if ( array() === $rows ) {
-			wp_safe_redirect( admin_url( 'admin.php?page=' . self::SLUG ) );
+			wp_safe_redirect( self::url() );
 			exit;
 		}
 
 		$report = ( new Importer() )->import( $rows, $prefix );
 
 		wp_safe_redirect(
-			admin_url( 'admin.php?page=bli-import-report&report=' . rawurlencode( (string) $report['id'] ) )
+			self::url( self::REPORT_SLUG, 'report=' . rawurlencode( (string) $report['id'] ) )
 		);
 		exit;
 	}

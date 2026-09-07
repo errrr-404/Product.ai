@@ -144,7 +144,7 @@ class Import_Report {
 
 		if ( null === $report ) {
 			echo '<p>' . esc_html__( 'No imports yet.', 'bulk-list-import' ) . '</p>';
-			echo '<p><a class="button button-primary" href="' . esc_url( admin_url( 'admin.php?page=bulk-list-import' ) ) . '">'
+			echo '<p><a class="button button-primary" href="' . esc_url( Admin_Page::url() ) . '">'
 				. esc_html__( 'Start an import', 'bulk-list-import' ) . '</a></p>';
 			echo '</div>';
 			return;
@@ -240,8 +240,9 @@ class Import_Report {
 				echo '<a href="' . esc_url( (string) $entry['edit_url'] ) . '">' . esc_html__( 'Edit product', 'bulk-list-import' ) . '</a>';
 			} elseif ( 'failed' === ( $entry['outcome'] ?? '' ) ) {
 				$retry = wp_nonce_url(
-					admin_url(
-						'admin.php?page=bulk-list-import&retry=' . rawurlencode( (string) ( $report['id'] ?? '' ) )
+					Admin_Page::url(
+						Admin_Page::SLUG,
+						'retry=' . rawurlencode( (string) ( $report['id'] ?? '' ) )
 						. '&line=' . (int) ( $entry['line'] ?? 0 )
 					),
 					'bli_retry'
@@ -284,7 +285,7 @@ class Import_Report {
 			if ( $id === $current ) {
 				echo '<strong>' . esc_html( $label ) . '</strong>';
 			} else {
-				$url = admin_url( 'admin.php?page=bli-import-report&report=' . rawurlencode( $id ) );
+				$url = Admin_Page::url( Admin_Page::REPORT_SLUG, 'report=' . rawurlencode( $id ) );
 				echo '<a href="' . esc_url( $url ) . '">' . esc_html( $label ) . '</a>';
 			}
 			echo '</li>';

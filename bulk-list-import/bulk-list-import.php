@@ -4,7 +4,7 @@
  * Plugin URI:        https://example.com/bulk-list-import
  * Description:       Turn a raw pasted product list into reviewable draft products with continuous SKUs. Stop typing. Start reviewing.
  * Version:           0.3.0
- * Requires at least: 6.0
+ * Requires at least: 6.2
  * Requires PHP:      8.0
  * Author:            Bulk List Import
  * License:           GPL-2.0-or-later

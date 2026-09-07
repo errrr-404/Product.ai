@@ -98,6 +98,38 @@ if ( 2 === count( $dupes ) && in_array( 'duplicate', $dupes[1]['flags'], true ) 
 	echo "FAIL  duplicate row flagged against the first occurrence\n";
 }
 
+// Accent normalisation: accented and unaccented spellings of the same product
+// must collapse to one duplicate key, or both import as separate products.
+$accent_pairs = array(
+	array( 'Rémy Martin 1738 — 70cl — ₦95,000', 'Remy Martin 1738 — 70cl — ₦95,000' ),
+	array( 'Volcán Cristalino — 75cl — ₦180,000', 'Volcan Cristalino — 75cl — ₦180,000' ),
+	array( 'Patrón Silver — 75cl — ₦120,000', 'Patron Silver — 75cl — ₦120,000' ),
+);
+
+foreach ( $accent_pairs as $pair ) {
+	$rows  = $parser->parse( $pair[0] . "\n" . $pair[1] );
+	$label = sprintf( 'accent pair collapses: %s / %s', $pair[0], $pair[1] );
+
+	$ok = 2 === count( $rows )
+		&& in_array( 'duplicate', $rows[1]['flags'], true )
+		&& 1 === $rows[1]['duplicate_of']
+		&& false === $rows[1]['importable'];
+
+	if ( $ok ) {
+		++$passed;
+		printf( "PASS  %s\n", $label );
+	} else {
+		++$failed;
+		printf( "FAIL  %s\n", $label );
+		printf(
+			"        row 2 flags=%s duplicate_of=%s importable=%s\n",
+			var_export( $rows[1]['flags'] ?? null, true ),
+			var_export( $rows[1]['duplicate_of'] ?? null, true ),
+			var_export( $rows[1]['importable'] ?? null, true )
+		);
+	}
+}
+
 // A row with no unit must score full confidence when name and price are present.
 $no_unit = $parser->parse_line( 'Office Chair, Ergonomic Mesh — ₦75,000', 1 );
 
