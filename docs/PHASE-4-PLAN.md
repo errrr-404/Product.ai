@@ -47,7 +47,7 @@ same property as the parser suite.
 - WP Settings API, `register_setting` with sanitize callbacks.
 - Entire AI section behind `bli_is_pro()`.
 
-## 4d — Recognition gate (pass 1)
+## 4d — Recognition gate (pass 1) — done
 
 - Batched at ~20 names per call. Results cached in a transient keyed on
   `hash( provider | model | name )`, so re-previewing after editing one row does
@@ -65,10 +65,29 @@ same property as the parser suite.
   brand, and a blocked count on the button — `Import 16 products (4 blocked)`.
 - Live token estimate from the selected count (~650 tokens/product).
 
+**Landed with two things worth carrying forward.**
+
+`Recognition_Gate::judge()` maps provider verdicts back to rows *by position*.
+That is only safe because `Response_Validator::validate_recognition()` guarantees
+one record per requested name in the order requested, and throws when a name is
+missing. If that guarantee is ever relaxed, this loop starts handing one
+product's judgement to another — marking a product the model does not know as
+recognised, which is the failure the gate exists to prevent. The coupling is
+commented at both ends.
+
+`UNCHECKED` is not a verdict and must never be rendered as one. Rows past the
+one-call cap are labelled "Not yet checked", stay selectable, and are re-checked
+in 4e before anything is generated for them. Non-candidate rows — headings,
+duplicates — carry no gate key at all rather than a default state, so nothing can
+mistake "never asked" for "passed".
+
 ## 4e — Queued generation (pass 2)
 
 - Custom tables `{prefix}bli_imports` and `{prefix}bli_import_rows`, `dbDelta`
   gated behind a schema version option, uninstall hook dropping both.
+- **Re-check `UNCHECKED` rows before generating.** They cleared the preview only
+  because they fell past the one-call cap, not because anyone judged them. A row
+  that reaches generation ungated is a row the gate did not gate.
 - Action Scheduler, **one row per job**, each carrying its pre-assigned SKU.
 - SKUs reserved once at enqueue time.
 - Report rows written incrementally, so closing the tab loses nothing.

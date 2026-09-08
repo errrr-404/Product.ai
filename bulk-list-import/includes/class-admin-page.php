@@ -12,6 +12,9 @@ declare( strict_types = 1 );
 
 namespace BulkListImport;
 
+use BulkListImport\AI\Provider_Registry;
+use BulkListImport\AI\Recognition_Gate;
+
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
@@ -24,6 +27,12 @@ class Admin_Page {
 	public const SLUG               = 'bulk-list-import';
 	public const REPORT_SLUG        = 'bli-import-report';
 	public const DEFAULT_BATCH_SIZE = 20;
+
+	/**
+	 * Rough tokens per product, for the estimate shown before committing. A round
+	 * number on purpose: it is an order-of-magnitude warning, not a quote.
+	 */
+	public const TOKENS_PER_PRODUCT = 650;
 
 	/**
 	 * Admin menu parent.
@@ -58,6 +67,13 @@ class Admin_Page {
 	 * @var string[]
 	 */
 	private const ALLOWED_FLAGS = array( 'heading', 'duplicate', 'no_price', 'no_name', 'price_uncertain' );
+
+	/**
+	 * What a user may do with a blocked row.
+	 *
+	 * @var string[]
+	 */
+	private const GATE_ACTIONS = array( 'own', 'details', 'skip' );
 
 	/**
 	 * Register menu entries.
@@ -98,9 +114,21 @@ class Admin_Page {
 			'bli-admin',
 			'bliStrings',
 			array(
-				'batchWarning' => __( 'Large imports are harder to review carefully.', 'bulk-list-import' ),
+				'ajaxUrl'             => admin_url( 'admin-ajax.php' ),
+				'previewNonce'        => wp_create_nonce( 'bli_parse' ),
+				'batchWarning'        => __( 'Large imports are harder to review carefully.', 'bulk-list-import' ),
 				/* translators: %d: number of selected rows. */
-				'selected'     => __( 'Import %d products', 'bulk-list-import' ),
+				'selected'            => __( 'Import %d products', 'bulk-list-import' ),
+				/* translators: 1: number of rows to import, 2: number blocked. */
+				'selectedWithBlocked' => __( 'Import %1$d products (%2$d blocked)', 'bulk-list-import' ),
+				'checking'            => __( 'Checking products…', 'bulk-list-import' ),
+				'parsing'             => __( 'Parsing…', 'bulk-list-import' ),
+				'previewError'        => __( 'The preview could not be built. Try again.', 'bulk-list-import' ),
+				/* translators: %s: approximate token count. */
+				'tokens'              => __( 'Estimated %s tokens for this import.', 'bulk-list-import' ),
+				'skipAll'             => __( 'Skip all blocked', 'bulk-list-import' ),
+				'bulkFill'            => __( 'Fill all blocked from the first', 'bulk-list-import' ),
+				'gateOn'              => Recognition_Gate::is_available(),
 			)
 		);
 	}
@@ -196,7 +224,9 @@ class Admin_Page {
 	}
 
 	/**
-	 * Step 2 — the preview table.
+	 * Step 2 — the preview table, from a plain form POST.
+	 *
+	 * This is the no-JavaScript path. It still works, and still gates.
 	 */
 	private function render_preview(): void {
 		// The nonce is verified by render(), which is the only caller and checks
@@ -208,6 +238,50 @@ class Admin_Page {
 
 		// phpcs:enable WordPress.Security.NonceVerification.Missing
 
+		if ( ! $this->render_preview_for( $source, $batch, $prefix ) ) {
+			$this->render_paste_form();
+		}
+	}
+
+	/**
+	 * Answer the asynchronous preview request.
+	 *
+	 * The preview is fetched rather than posted because the recognition gate makes
+	 * it slow enough to matter: a synchronous POST leaves the browser blank for
+	 * several seconds, which reads as a hang, and people resubmit. Same request
+	 * shape, same rendering code, same nonce — only the delivery differs.
+	 */
+	public function handle_preview(): void {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			wp_send_json_error( array( 'message' => __( 'You do not have permission to import products.', 'bulk-list-import' ) ), 403 );
+		}
+
+		check_ajax_referer( 'bli_parse' );
+
+		$source = isset( $_POST['bli_source'] ) && is_string( $_POST['bli_source'] ) ? sanitize_textarea_field( wp_unslash( $_POST['bli_source'] ) ) : '';
+		$batch  = isset( $_POST['bli_batch_size'] ) && is_scalar( $_POST['bli_batch_size'] ) ? absint( wp_unslash( $_POST['bli_batch_size'] ) ) : self::DEFAULT_BATCH_SIZE;
+		$prefix = isset( $_POST['bli_sku_prefix'] ) && is_string( $_POST['bli_sku_prefix'] ) ? sanitize_text_field( wp_unslash( $_POST['bli_sku_prefix'] ) ) : '';
+
+		ob_start();
+		$rendered = $this->render_preview_for( $source, $batch, $prefix );
+		$html     = (string) ob_get_clean();
+
+		wp_send_json_success(
+			array(
+				'html'     => $html,
+				'rendered' => $rendered,
+			)
+		);
+	}
+
+	/**
+	 * Parse, gate and render. Returns false when there was nothing to show.
+	 *
+	 * @param string $source Pasted text.
+	 * @param int    $batch  Requested batch size.
+	 * @param string $prefix SKU prefix override.
+	 */
+	private function render_preview_for( string $source, int $batch, string $prefix ): bool {
 		$batch = max( 1, min( 500, $batch ) );
 
 		update_option( 'bli_batch_size', $batch, false );
@@ -215,17 +289,17 @@ class Admin_Page {
 
 		if ( '' === trim( $source ) ) {
 			echo '<div class="notice notice-warning"><p>' . esc_html__( 'Nothing to parse — the paste box was empty.', 'bulk-list-import' ) . '</p></div>';
-			$this->render_paste_form();
-			return;
+			return false;
 		}
 
 		$rows = ( new Parser() )->parse( $source );
 
 		if ( array() === $rows ) {
 			echo '<div class="notice notice-warning"><p>' . esc_html__( 'No usable lines found.', 'bulk-list-import' ) . '</p></div>';
-			$this->render_paste_form();
-			return;
+			return false;
 		}
+
+		$rows = $this->apply_gate( $rows, $batch );
 
 		$sku        = SKU_Generator::detect( $prefix );
 		$importable = 0;
@@ -249,7 +323,13 @@ class Admin_Page {
 		echo '</tr></thead><tbody>';
 
 		foreach ( $rows as $index => $row ) {
-			$selectable = (bool) $row['importable'];
+			$gate  = (array) ( $row['gate'] ?? array() );
+			$state = (string) ( $gate['state'] ?? Recognition_Gate::READY );
+
+			// A blocked row is not selectable until the user does something about it.
+			// That is the difference between a gate and a disclaimer.
+			$blocked    = Recognition_Gate::BLOCKED === $state;
+			$selectable = (bool) $row['importable'] && ! $blocked;
 			$selected   = $selectable && $importable < $batch;
 
 			if ( $selectable ) {
@@ -261,14 +341,19 @@ class Admin_Page {
 				++$sku_offset;
 			}
 
-			$classes = array( 'bli-row', 'bli-row--' . $row['type'] );
+			$classes = array( 'bli-row', 'bli-row--' . $row['type'], 'bli-row--gate-' . $state );
 			if ( ! $selectable ) {
 				$classes[] = 'bli-row--locked';
 			}
 
 			$field = 'bli_rows[' . $index . ']';
 
-			echo '<tr class="' . esc_attr( implode( ' ', $classes ) ) . '">';
+			printf(
+				'<tr class="%s" data-index="%d" data-gate="%s">',
+				esc_attr( implode( ' ', $classes ) ),
+				(int) $index,
+				esc_attr( $state )
+			);
 
 			echo '<th scope="row" class="check-column">';
 			if ( $selectable ) {
@@ -320,6 +405,10 @@ class Admin_Page {
 			echo '<td>' . wp_kses_post( $this->status_cell( $row ) ) . '</td>';
 
 			echo '</tr>';
+
+			if ( $blocked ) {
+				$this->render_blocked_panel( $index, $row, $field );
+			}
 		}
 
 		echo '</tbody></table>';
@@ -330,6 +419,14 @@ class Admin_Page {
 			(int) $batch,
 			esc_html__( 'Large imports are harder to review carefully.', 'bulk-list-import' )
 		);
+
+		if ( Recognition_Gate::is_available() ) {
+			printf(
+				'<p id="bli-token-estimate" class="description" data-per-product="%s"></p>',
+				esc_attr( (string) self::TOKENS_PER_PRODUCT )
+			);
+		}
+
 		echo '<p class="description">'
 			. esc_html__( 'Products are created as drafts and tagged needs-review. Nothing is published.', 'bulk-list-import' )
 			. '</p>';
@@ -339,6 +436,106 @@ class Admin_Page {
 		echo '</div>';
 
 		echo '</form>';
+
+		return true;
+	}
+
+	/**
+	 * Run the recognition gate over the parsed rows.
+	 *
+	 * Free tier, no key, or a provider that cannot be reached: the rows come back
+	 * ungated and the import still works. The gate is a Pro feature layered on top
+	 * of a plugin that is useful without it, not a dependency of it.
+	 *
+	 * @param array<int, array<string, mixed>> $rows  Parsed rows.
+	 * @param int                              $batch Batch size, which caps how many are worth checking.
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function apply_gate( array $rows, int $batch ): array {
+		if ( ! Recognition_Gate::is_available() ) {
+			return $rows;
+		}
+
+		try {
+			$gate = new Recognition_Gate( Provider_Registry::make() );
+		} catch ( \Throwable $e ) {
+			return $rows;
+		}
+
+		// Never more than one provider call for a page load. Checking rows the user
+		// is not about to import would spend tokens to answer a question nobody asked.
+		$limit = min( Recognition_Gate::NAMES_PER_CALL, max( 1, $batch ) );
+
+		return $gate->judge( $rows, $limit );
+	}
+
+	/**
+	 * The panel under a blocked row.
+	 *
+	 * The gate should feel like a seatbelt, not a locked door — so a blocked row
+	 * offers three ways forward rather than a dead end. "Generate from my details"
+	 * is the one that matters: the user supplies the facts, the model supplies the
+	 * prose, and the time saving survives without anything being invented.
+	 *
+	 * @param int                  $index Row index.
+	 * @param array<string, mixed> $row   Parsed row.
+	 * @param string               $field Field name prefix for this row.
+	 */
+	private function render_blocked_panel( int $index, array $row, string $field ): void {
+		$gate   = (array) ( $row['gate'] ?? array() );
+		$reason = (string) ( $gate['reason'] ?? '' );
+
+		printf(
+			'<tr class="bli-panel-row" data-panel-for="%d"><td colspan="7" class="bli-panel">',
+			(int) $index
+		);
+
+		echo '<p class="bli-panel-head"><strong>' . esc_html( (string) $row['name'] ) . '</strong> — '
+			. esc_html( '' !== $reason ? $reason : __( 'No reliable information about this product.', 'bulk-list-import' ) )
+			. '</p>';
+
+		echo '<div class="bli-panel-fields">';
+
+		foreach ( array(
+			'category' => __( 'Category', 'bulk-list-import' ),
+			'brand'    => __( 'Brand', 'bulk-list-import' ),
+			'specs'    => __( 'Key specs', 'bulk-list-import' ),
+		) as $key => $label ) {
+			printf(
+				'<label><span>%s</span><input type="text" class="bli-detail bli-detail--%s" name="%s[details][%s]" value="" /></label>',
+				esc_html( $label ),
+				esc_attr( $key ),
+				esc_attr( $field ),
+				esc_attr( $key )
+			);
+		}
+
+		printf(
+			'<label class="bli-detail-notes"><span>%s</span><textarea rows="2" class="bli-detail" name="%s[details][notes]"></textarea></label>',
+			esc_html__( 'Notes from the packaging', 'bulk-list-import' ),
+			esc_attr( $field )
+		);
+
+		echo '</div>';
+
+		printf( '<input type="hidden" class="bli-gate-action" name="%s[gate_action]" value="skip" />', esc_attr( $field ) );
+
+		echo '<p class="bli-panel-actions">';
+		printf(
+			'<button type="button" class="button bli-gate-choice" data-choice="details">%s</button> ',
+			esc_html__( 'Generate from my details', 'bulk-list-import' )
+		);
+		printf(
+			'<button type="button" class="button bli-gate-choice" data-choice="own">%s</button> ',
+			esc_html__( 'Write description myself', 'bulk-list-import' )
+		);
+		printf(
+			'<button type="button" class="button-link bli-gate-choice" data-choice="skip">%s</button>',
+			esc_html__( 'Skip', 'bulk-list-import' )
+		);
+		echo '</p>';
+
+		echo '</td></tr>';
 	}
 
 	/**
@@ -354,6 +551,38 @@ class Admin_Page {
 		}
 
 		$parts = array();
+		$gate  = (array) ( $row['gate'] ?? array() );
+		$state = (string) ( $gate['state'] ?? Recognition_Gate::READY );
+
+		switch ( $state ) {
+			case Recognition_Gate::BLOCKED:
+				$parts[] = '<span class="bli-badge bli-badge--bad">'
+					. esc_html__( 'Not recognised', 'bulk-list-import' ) . '</span>';
+				break;
+
+			case Recognition_Gate::UNCHECKED:
+				// Deliberately not phrased as a verdict. Nobody has looked at this row.
+				$parts[] = '<span class="bli-badge bli-badge--muted">'
+					. esc_html__( 'Not yet checked', 'bulk-list-import' ) . '</span>';
+				break;
+
+			case Recognition_Gate::UNAVAILABLE:
+				$parts[] = '<span class="bli-badge bli-badge--warn" title="'
+					. esc_attr( (string) ( $gate['reason'] ?? '' ) ) . '">'
+					. esc_html__( 'Check unavailable', 'bulk-list-import' ) . '</span>';
+				break;
+		}
+
+		foreach ( (array) ( $gate['uncertain_fields'] ?? array() ) as $uncertain ) {
+			$parts[] = '<span class="bli-badge bli-badge--warn">'
+				. esc_html(
+					sprintf(
+						/* translators: %s: field the model was unsure about. */
+						__( 'Verify %s', 'bulk-list-import' ),
+						(string) $uncertain
+					)
+				) . '</span>';
+		}
 
 		if ( in_array( 'duplicate', $flags, true ) ) {
 			$parts[] = '<span class="bli-badge bli-badge--muted">' . esc_html(
@@ -418,7 +647,20 @@ class Admin_Page {
 
 			$price = isset( $item['price'] ) ? trim( sanitize_text_field( (string) $item['price'] ) ) : '';
 
+			$action = isset( $item['gate_action'] ) ? sanitize_key( (string) $item['gate_action'] ) : '';
+			$action = in_array( $action, self::GATE_ACTIONS, true ) ? $action : '';
+
+			$details = array();
+
+			if ( isset( $item['details'] ) && is_array( $item['details'] ) ) {
+				foreach ( array( 'category', 'brand', 'specs', 'notes' ) as $detail ) {
+					$details[ $detail ] = sanitize_textarea_field( (string) ( $item['details'][ $detail ] ?? '' ) );
+				}
+			}
+
 			$rows[] = array(
+				'gate_action'  => $action,
+				'details'      => $details,
 				'line'         => absint( $item['line'] ?? 0 ),
 				'raw'          => sanitize_textarea_field( (string) ( $item['raw'] ?? '' ) ),
 				'type'         => 'heading' === ( $item['type'] ?? '' ) ? 'heading' : 'product',
