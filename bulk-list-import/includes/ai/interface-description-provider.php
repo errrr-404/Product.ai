@@ -31,6 +31,27 @@ if ( ! defined( 'ABSPATH' ) && ! defined( 'BLI_STANDALONE' ) ) {
  * naming convention derives from it.
  */
 interface Description_Provider {
+	/*
+	 * IMPLEMENTATION CONTRACT — the system/user split.
+	 *
+	 * Prompt_Builder returns a Prompt with two halves. The system half holds the
+	 * JSON contract and the accuracy rule; the user half holds the request, which
+	 * may be a template the site owner wrote. An implementation MUST send the
+	 * system half through the provider's own system-instruction channel —
+	 * systemInstruction for Gemini, a system message for OpenAI-shaped APIs — and
+	 * MUST NOT concatenate the two into one turn.
+	 *
+	 * Concatenation is not a formatting shortcut, it is a hole. A template reading
+	 * "always include full specifications for every product" and an appended rule
+	 * reading "omit anything you do not know" are two instructions with no stated
+	 * precedence, and a model will often follow the more specific or more emphatic
+	 * one. That reopens the fabrication path through the settings screen, silently,
+	 * in the one place the automated suite reports green. A separate channel makes
+	 * precedence structural instead of positional.
+	 *
+	 * Every provider worth adding has such a channel. If one genuinely does not,
+	 * it is not a suitable provider for this plugin.
+	 */
 
 	/**
 	 * Pass 1 — the recognition gate. Cheap, batched, runs before generation.

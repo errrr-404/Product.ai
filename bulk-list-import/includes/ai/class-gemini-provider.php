@@ -182,13 +182,13 @@ final class Gemini_Provider implements Description_Provider {
 	 * Run the call, validate it, and retry once if the policy says the failure is
 	 * worth a second attempt and the clock allows it.
 	 *
-	 * @param string   $prompt   The prompt.
+	 * @param Prompt   $prompt   The prompt, system and user halves kept apart.
 	 * @param callable $validate Receives the raw text, returns the validated payload.
 	 * @return array<mixed> The validated payload.
 	 * @throws Provider_Exception If the call fails, or there is no time for an attempt.
 	 * @throws Invalid_Response_Exception If validation fails and a retry is not worthwhile.
 	 */
-	private function attempt( string $prompt, callable $validate ): array {
+	private function attempt( Prompt $prompt, callable $validate ): array {
 		$started    = microtime( true );
 		$budget     = $this->policy->budget();
 		$tokens     = self::MAX_OUTPUT_TOKENS;
@@ -227,7 +227,11 @@ final class Gemini_Provider implements Description_Provider {
 					// ceiling would truncate in the same place.
 					$tokens = self::MAX_OUTPUT_TOKENS_RETRY;
 				} else {
-					$current = $prompt . "\n\n" . $this->nudge( $decision['lever'], $e );
+					// Appended to the user turn only. A nudge is a correction about
+					// the last reply, not a rule — and the rules must stay exactly as
+					// they were, or a retry would quietly hold the model to a
+					// different contract from the one the first attempt was given.
+					$current = $prompt->with_appended_user( $this->nudge( $decision['lever'], $e ) );
 				}
 			}
 		}
@@ -261,20 +265,30 @@ final class Gemini_Provider implements Description_Provider {
 	/**
 	 * Make one HTTP call and return the model's text.
 	 *
-	 * @param string $prompt   Prompt to send.
+	 * The system half goes in systemInstruction, never concatenated into the user
+	 * turn. That is the point of the split: a user template demanding complete
+	 * specifications and an appended rule to omit unknown ones are two instructions
+	 * with no stated precedence, and a model will often follow the more specific or
+	 * more emphatic one. A separate channel makes precedence structural rather than
+	 * positional.
+	 *
+	 * @param Prompt $prompt   Prompt to send.
 	 * @param int    $tokens   Output token ceiling.
 	 * @param int    $timeout  Seconds.
 	 * @return string The raw text of the reply.
 	 * @throws Provider_Exception If the transport or the provider fails.
 	 */
-	private function request( string $prompt, int $tokens, int $timeout ): string {
+	private function request( Prompt $prompt, int $tokens, int $timeout ): string {
 		$body = array(
-			'contents'         => array(
+			'systemInstruction' => array(
+				'parts' => array( array( 'text' => $prompt->system() ) ),
+			),
+			'contents'          => array(
 				array(
-					'parts' => array( array( 'text' => $prompt ) ),
+					'parts' => array( array( 'text' => $prompt->user() ) ),
 				),
 			),
-			'generationConfig' => array(
+			'generationConfig'  => array(
 				'temperature'      => 0.4,
 				'maxOutputTokens'  => $tokens,
 				// Ask for JSON at the transport level as well as in the prompt. It

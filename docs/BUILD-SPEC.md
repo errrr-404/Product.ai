@@ -224,6 +224,17 @@ The gate should feel like a seatbelt, not a locked door.
 
 - **API keys never touch the browser.** Server-side only, via
   `wp_remote_post()`. Not cURL, not Guzzle.
+- **The system/user prompt split is a safety boundary.** The JSON contract and
+  the accuracy rule go in the provider's system-instruction channel; the user's
+  template goes in the user turn. Never concatenate them. Appending establishes
+  no precedence — a template reading "always include full specifications" and an
+  appended "omit anything you do not know" are two instructions, and a model will
+  often follow the more specific or emphatic one, which is the user's. That
+  reopens fabrication through the settings screen in the one place the automated
+  suite reports green. The system instruction also carries an explicit override
+  clause telling the model to ignore any request for a specification it does not
+  know. Only a live-API test can confirm the rule actually wins; the standalone
+  suite can only confirm the two halves stay separate.
 - **API key storage, and what it actually protects.** WordPress has no key
   management: anything encrypted with a key derived from the salts is defeated
   by the same filesystem access that reveals `wp-config.php`. What it does stop
@@ -252,6 +263,11 @@ The gate should feel like a seatbelt, not a locked door.
   carrying an attempt counter, capped at `Retry_Policy::MAX_OUTER_ATTEMPTS`.
   The report row needs an `attempts` column so the user can tell "failed once,
   will retry" from "gave up after three".
+- **Which loop a failure belongs to.** The inner loop is for prompt-level
+  failures where a reworded ask fixes things instantly; infrastructure failures
+  need time to pass, and time is the one thing a single PHP request can't spend.
+  That is the whole rule — every validation failure is inner, every HTTP failure
+  worth retrying is outer.
 - **429 is not a 503.** A 503 clears in seconds; a rate limit on a free tier is a
   per-minute or per-day quota, so re-asking inside one attempt window fails
   identically and burns the attempt. Read `Retry-After`, let it override the

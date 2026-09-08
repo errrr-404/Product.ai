@@ -168,20 +168,46 @@ class Settings_Page {
 	}
 
 	/**
-	 * Accept any model-shaped string.
+	 * Accept any model-shaped string, but confirm the shape.
 	 *
 	 * Deliberately not validated against the fetched list. That list is a cache of
-	 * a remote call, and rejecting a model because our copy is a day old would
-	 * make the plugin harder to fix at exactly the moment a vendor retires
-	 * something. A wrong name surfaces as HTTP 404 with a reason pointing back
-	 * here, which is a better failure than a silently ignored setting.
+	 * a remote call, and rejecting a model because our copy is a day old would make
+	 * the plugin hardest to fix at exactly the moment a vendor retires something. A
+	 * wrong name surfaces as HTTP 404 with a reason pointing back here, which is a
+	 * better failure than a silently ignored setting.
+	 *
+	 * The shape still matters, because the value is interpolated into the request
+	 * path: /v1beta/models/{model}:generateContent. A "/" or a ".." would rewrite
+	 * that path. rawurlencode() at the call site already escapes the separator, so
+	 * this is defence in depth rather than a live hole — but a constrained shape is
+	 * cheaper to reason about than an escaping guarantee two files away, and
+	 * rejecting outright beats silently stripping a name into something the user
+	 * never typed.
 	 *
 	 * @param mixed $value Submitted value.
 	 */
 	public function sanitize_model( $value ): string {
-		$value = sanitize_text_field( (string) $value );
+		$value = trim( sanitize_text_field( (string) $value ) );
 
-		return (string) preg_replace( '/[^A-Za-z0-9._\-]/', '', $value );
+		if ( '' === $value ) {
+			return '';
+		}
+
+		if ( ! preg_match( '/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/', $value ) || str_contains( $value, '..' ) ) {
+			add_settings_error(
+				self::GROUP,
+				'bli_bad_model',
+				sprintf(
+					/* translators: %s: the rejected model name. */
+					__( '"%s" is not a valid model name, so the model setting was left unchanged.', 'bulk-list-import' ),
+					$value
+				)
+			);
+
+			return (string) get_option( 'bli_ai_model', '' );
+		}
+
+		return $value;
 	}
 
 	/**

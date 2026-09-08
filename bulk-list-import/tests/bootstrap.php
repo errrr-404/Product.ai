@@ -20,6 +20,7 @@ require_once __DIR__ . '/../includes/class-ascii-folder.php';
 require_once __DIR__ . '/../includes/class-parser.php';
 require_once __DIR__ . '/../includes/ai/class-invalid-response-exception.php';
 require_once __DIR__ . '/../includes/ai/class-response-validator.php';
+require_once __DIR__ . '/../includes/ai/class-prompt.php';
 require_once __DIR__ . '/../includes/ai/class-prompt-builder.php';
 require_once __DIR__ . '/../includes/ai/class-provider-exception.php';
 require_once __DIR__ . '/../includes/ai/class-retry-policy.php';
