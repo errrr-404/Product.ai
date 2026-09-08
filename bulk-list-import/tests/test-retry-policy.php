@@ -160,6 +160,30 @@ $report( 900 === $policy->outer_delay( 3 ), 'third outer attempt backs off to 90
 $report( 900 === $policy->outer_delay( 99 ), 'backoff is clamped, not indexed past the end', 'got ' . $policy->outer_delay( 99 ) );
 $report( 5 === $policy->outer_delay( 1, 1 ), 'a tiny Retry-After is floored so the loop cannot spin', 'got ' . $policy->outer_delay( 1, 1 ) );
 
+// The schedule is injectable so the verification doc never has to tell anyone to
+// edit source. Queue applies the bli_outer_backoff filter and passes the result
+// in; the filter cannot live in this class, which has no WordPress.
+$fast = new Retry_Policy( array( 5, 5 ) );
+$report( 5 === $fast->outer_delay( 1 ), 'an injected schedule is used', 'got ' . $fast->outer_delay( 1 ) );
+$report( 5 === $fast->outer_delay( 9 ), 'a short schedule repeats its last delay rather than overrunning', 'got ' . $fast->outer_delay( 9 ) );
+
+// A filter returning junk must not disable backoff altogether — a zero delay
+// would turn the outer loop into a spin against a provider already refusing us.
+foreach ( array(
+	'empty'       => array(),
+	'non-numeric' => array( 'soon', 'later' ),
+	'zero'        => array( 0, 0 ),
+	'negative'    => array( -60 ),
+) as $label => $junk ) {
+	$report(
+		60 === ( new Retry_Policy( $junk ) )->outer_delay( 1 ),
+		sprintf( 'a %s schedule falls back to the default', $label )
+	);
+}
+
+// Partially valid falls back to just the valid part, not to nothing.
+$report( 30 === ( new Retry_Policy( array( 0, 30 ) ) )->outer_delay( 1 ), 'valid entries survive a partly junk schedule' );
+
 $report( true === $policy->has_outer_attempts_left( 2 ), 'a third outer attempt is allowed' );
 $report( false === $policy->has_outer_attempts_left( 3 ), 'a fourth outer attempt is not' );
 

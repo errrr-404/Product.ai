@@ -67,12 +67,58 @@ final class Retry_Policy {
 	public const MAX_OUTER_ATTEMPTS = 3;
 
 	/**
-	 * Outer-loop backoff, in seconds, by attempt number. Used only when the
-	 * provider gives no Retry-After of its own.
+	 * Default outer-loop backoff, in seconds, by attempt number. Used only when
+	 * the provider gives no Retry-After of its own.
+	 *
+	 * Overridable per instance rather than through a filter read in here: this
+	 * class is deliberately free of WordPress, so apply_filters() would break the
+	 * standalone suite and a function_exists() guard around it would mean the
+	 * tested path is not the shipped path. Queue applies the bli_outer_backoff
+	 * filter and passes the result in, which is the same boundary drawn between
+	 * Gate_Policy and Recognition_Gate.
 	 *
 	 * @var int[]
 	 */
-	private const OUTER_BACKOFF = array( 60, 300, 900 );
+	public const DEFAULT_BACKOFF = array( 60, 300, 900 );
+
+	/**
+	 * Backoff schedule in use.
+	 *
+	 * @var int[]
+	 */
+	private array $backoff;
+
+	/**
+	 * Build the policy.
+	 *
+	 * @param array<int, mixed>|null $backoff Seconds by attempt; null for the default.
+	 */
+	public function __construct( ?array $backoff = null ) {
+		$this->backoff = self::sanitise_backoff( $backoff );
+	}
+
+	/**
+	 * Keep a supplied schedule to positive whole seconds, falling back whole
+	 * rather than partially: half a filtered schedule would be worse than none.
+	 *
+	 * @param array<int, mixed>|null $backoff Candidate schedule.
+	 * @return int[]
+	 */
+	private static function sanitise_backoff( ?array $backoff ): array {
+		if ( null === $backoff ) {
+			return self::DEFAULT_BACKOFF;
+		}
+
+		$clean = array();
+
+		foreach ( $backoff as $seconds ) {
+			if ( ( is_int( $seconds ) || is_float( $seconds ) ) && $seconds > 0 ) {
+				$clean[] = (int) $seconds;
+			}
+		}
+
+		return array() === $clean ? self::DEFAULT_BACKOFF : $clean;
+	}
 
 	/**
 	 * Floor on any delay, so a provider answering "retry after 0" cannot turn the
@@ -296,9 +342,11 @@ final class Retry_Policy {
 			return max( self::MIN_DELAY, $retry_after );
 		}
 
-		$index = max( 0, min( $attempt - 1, count( self::OUTER_BACKOFF ) - 1 ) );
+		// Clamped rather than indexed past the end, so a filtered schedule shorter
+		// than MAX_OUTER_ATTEMPTS simply repeats its last delay.
+		$index = max( 0, min( $attempt - 1, count( $this->backoff ) - 1 ) );
 
-		return self::OUTER_BACKOFF[ $index ];
+		return $this->backoff[ $index ];
 	}
 
 	/**

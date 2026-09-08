@@ -99,7 +99,17 @@ final class Queue {
 	 * @return array{outcome: string, reason: string}
 	 */
 	public static function retry( int $row_id, int $attempts, string $reason, int $retry_after = 0 ): array {
-		$policy = new Retry_Policy();
+		/**
+		 * Filters the outer-loop backoff schedule, in seconds by attempt.
+		 *
+		 * Applied here rather than inside Retry_Policy, which is free of WordPress
+		 * so its decision table can be tested standalone.
+		 *
+		 * @param int[] $backoff Seconds to wait before each outer attempt.
+		 */
+		$backoff = (array) apply_filters( 'bli_outer_backoff', Retry_Policy::DEFAULT_BACKOFF );
+
+		$policy = new Retry_Policy( $backoff );
 
 		if ( ! self::is_available() || ! $policy->has_outer_attempts_left( $attempts ) ) {
 			return array(
