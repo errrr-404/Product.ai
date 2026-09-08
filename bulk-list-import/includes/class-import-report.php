@@ -2,10 +2,9 @@
 /**
  * The Import Report — the second of the two required review moments.
  *
- * The pre-import gate (Phase 4) stops invention at source. It cannot catch a
- * call that fails halfway through, a malformed response, or a save error. That
- * is what this screen is for, and it must exist before the AI layer so Phase 4
- * only adds new failure *reasons*, not a new screen.
+ * The pre-import gate stops invention at source. It cannot catch a call that
+ * fails halfway through, a malformed response, or a save error. That is what
+ * this screen is for.
  *
  * @package BulkListImport
  */
@@ -19,98 +18,33 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
- * Stores and renders import reports.
+ * Renders import reports from the store.
  */
 class Import_Report {
 
-	private const OPTION = 'bli_import_reports';
-
 	/**
-	 * How many reports to keep. The user must be able to close the tab, come
-	 * back, and still see what happened.
-	 */
-	private const KEEP = 10;
-
-	/**
-	 * Persist a report and return it.
+	 * Persist a finished set of entries and return the new import id.
 	 *
 	 * @param array<int, array<string, mixed>> $entries One entry per input row.
-	 * @return array<string, mixed>
+	 * @return int Import id.
 	 */
-	public static function save( array $entries ): array {
-		$report = array(
-			'id'      => uniqid( 'imp_', false ),
-			'time'    => time(),
-			'user'    => get_current_user_id(),
-			'entries' => array_values( $entries ),
-			'totals'  => self::totals( $entries ),
-		);
-
-		$reports = self::all();
-		array_unshift( $reports, $report );
-		$reports = array_slice( $reports, 0, self::KEEP );
-
-		update_option( self::OPTION, $reports, false );
-
-		return $report;
-	}
-
-	/**
-	 * All stored reports, newest first.
-	 *
-	 * @return array<int, array<string, mixed>>
-	 */
-	public static function all(): array {
-		$reports = get_option( self::OPTION, array() );
-
-		return is_array( $reports ) ? $reports : array();
-	}
-
-	/**
-	 * Fetch one report by ID.
-	 *
-	 * @param string $id Report ID.
-	 * @return array<string, mixed>|null
-	 */
-	public static function get( string $id ): ?array {
-		foreach ( self::all() as $report ) {
-			if ( (string) ( $report['id'] ?? '' ) === $id ) {
-				return $report;
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Count outcomes.
-	 *
-	 * @param array<int, array<string, mixed>> $entries Report entries.
-	 * @return array<string, int>
-	 */
-	public static function totals( array $entries ): array {
-		$totals = array(
-			'created'        => 0,
-			'created_verify' => 0,
-			'skipped'        => 0,
-			'failed'         => 0,
-			'not_generated'  => 0,
-		);
+	public static function save( array $entries ): int {
+		$import_id = Import_Store::create_import( count( $entries ) );
 
 		foreach ( $entries as $entry ) {
-			$outcome = (string) ( $entry['outcome'] ?? '' );
-			if ( isset( $totals[ $outcome ] ) ) {
-				++$totals[ $outcome ];
-			}
+			Import_Store::add_row( $import_id, $entry );
 		}
 
-		return $totals;
+		Import_Store::set_status( $import_id, 'complete' );
+		Import_Store::prune();
+
+		return $import_id;
 	}
 
 	/**
 	 * Human label and CSS modifier for an outcome.
 	 *
-	 * @param string $outcome Stored outcome key.
+	 * @param string $outcome Outcome slug.
 	 * @return array{0: string, 1: string}
 	 */
 	public static function outcome_label( string $outcome ): array {
@@ -123,6 +57,8 @@ class Import_Report {
 				return array( __( 'Skipped', 'bulk-list-import' ), 'muted' );
 			case 'not_generated':
 				return array( __( 'Not generated', 'bulk-list-import' ), 'warn' );
+			case 'pending':
+				return array( __( 'Waiting', 'bulk-list-import' ), 'muted' );
 			case 'failed':
 			default:
 				return array( __( 'Failed', 'bulk-list-import' ), 'bad' );
@@ -130,7 +66,7 @@ class Import_Report {
 	}
 
 	/**
-	 * Render the reports screen: a single report if one is requested, otherwise a list.
+	 * Render the reports screen.
 	 */
 	public static function render_page(): void {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
@@ -138,13 +74,14 @@ class Import_Report {
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only navigation.
-		$id     = isset( $_GET['report'] ) && is_string( $_GET['report'] ) ? sanitize_text_field( wp_unslash( $_GET['report'] ) ) : '';
-		$report = '' !== $id ? self::get( $id ) : ( self::all()[0] ?? null );
+		$requested = isset( $_GET['report'] ) ? absint( $_GET['report'] ) : 0;
+		$recent    = Import_Store::recent();
+		$import    = $requested > 0 ? Import_Store::get_import( $requested ) : ( $recent[0] ?? null );
 
 		echo '<div class="wrap bli-wrap">';
 		echo '<h1>' . esc_html__( 'Import Report', 'bulk-list-import' ) . '</h1>';
 
-		if ( null === $report ) {
+		if ( null === $import ) {
 			echo '<p>' . esc_html__( 'No imports yet.', 'bulk-list-import' ) . '</p>';
 			echo '<p><a class="button button-primary" href="' . esc_url( Admin_Page::url() ) . '">'
 				. esc_html__( 'Start an import', 'bulk-list-import' ) . '</a></p>';
@@ -152,8 +89,8 @@ class Import_Report {
 			return;
 		}
 
-		self::render_report( $report );
-		self::render_history( (string) $report['id'] );
+		self::render_report( $import );
+		self::render_history( $recent, (int) $import['id'] );
 
 		echo '</div>';
 	}
@@ -161,13 +98,14 @@ class Import_Report {
 	/**
 	 * Render one report.
 	 *
-	 * @param array<string, mixed> $report Report record.
+	 * @param array<string, mixed> $import Import record.
 	 */
-	private static function render_report( array $report ): void {
-		$totals  = (array) ( $report['totals'] ?? array() );
-		$entries = (array) ( $report['entries'] ?? array() );
+	private static function render_report( array $import ): void {
+		$import_id = (int) $import['id'];
+		$totals    = Import_Store::totals( $import_id );
+		$rows      = Import_Store::get_rows( $import_id );
 
-		$attention = (int) ( $totals['created_verify'] ?? 0 ) + (int) ( $totals['not_generated'] ?? 0 );
+		$attention = $totals['created_verify'] + $totals['not_generated'];
 
 		printf(
 			'<p class="bli-report-summary">%s</p>',
@@ -175,13 +113,26 @@ class Import_Report {
 				sprintf(
 					/* translators: 1: created count, 2: needs-attention count, 3: failed count, 4: skipped count. */
 					__( 'Import complete — %1$d created, %2$d need attention, %3$d failed, %4$d skipped', 'bulk-list-import' ),
-					(int) ( $totals['created'] ?? 0 ),
+					$totals['created'],
 					$attention,
-					(int) ( $totals['failed'] ?? 0 ),
-					(int) ( $totals['skipped'] ?? 0 )
+					$totals['failed'],
+					$totals['skipped']
 				)
 			)
 		);
+
+		if ( $totals['pending'] > 0 ) {
+			printf(
+				'<p class="bli-warning">%s</p>',
+				esc_html(
+					sprintf(
+						/* translators: %d: number of rows still queued. */
+						__( '%d rows are still queued. This page updates as they finish — you can close it and come back.', 'bulk-list-import' ),
+						$totals['pending']
+					)
+				)
+			);
+		}
 
 		printf(
 			'<p class="description">%s</p>',
@@ -189,14 +140,14 @@ class Import_Report {
 				sprintf(
 					/* translators: %s: date and time. */
 					__( 'Run %s. Every row you pasted appears below.', 'bulk-list-import' ),
-					wp_date( 'j M Y, H:i', (int) ( $report['time'] ?? time() ) )
+					wp_date( 'j M Y, H:i', (int) strtotime( (string) $import['created_at'] . ' UTC' ) )
 				)
 			)
 		);
 
 		if ( bli_is_pro() ) {
 			$url = wp_nonce_url(
-				admin_url( 'admin-post.php?action=bli_export_report&report=' . rawurlencode( (string) $report['id'] ) ),
+				admin_url( 'admin-post.php?action=bli_export_report&report=' . $import_id ),
 				'bli_export_report'
 			);
 			echo '<p><a class="button" href="' . esc_url( $url ) . '">'
@@ -213,110 +164,118 @@ class Import_Report {
 		echo '<th>' . esc_html__( 'Product', 'bulk-list-import' ) . '</th>';
 		echo '<th>' . esc_html__( 'SKU', 'bulk-list-import' ) . '</th>';
 		echo '<th>' . esc_html__( 'Outcome', 'bulk-list-import' ) . '</th>';
+		echo '<th>' . esc_html__( 'Tries', 'bulk-list-import' ) . '</th>';
 		echo '<th>' . esc_html__( 'Reason', 'bulk-list-import' ) . '</th>';
 		echo '<th>' . esc_html__( 'Action', 'bulk-list-import' ) . '</th>';
 		echo '</tr></thead><tbody>';
 
-		foreach ( $entries as $entry ) {
-			list( $label, $modifier ) = self::outcome_label( (string) ( $entry['outcome'] ?? '' ) );
-
-			$name = (string) ( $entry['name'] ?? '' );
-			if ( '' === $name ) {
-				$name = (string) ( $entry['raw'] ?? '' );
-			}
-			$variant = (string) ( $entry['variant'] ?? '' );
-
-			echo '<tr>';
-			echo '<td>' . esc_html( (string) ( $entry['line'] ?? '' ) ) . '</td>';
-			echo '<td>' . esc_html( $name );
-			if ( '' !== $variant ) {
-				echo ' <span class="bli-variant">' . esc_html( $variant ) . '</span>';
-			}
-			echo '</td>';
-			$sku = (string) ( $entry['sku'] ?? '' );
-			echo '<td>' . esc_html( '' !== $sku ? $sku : '—' ) . '</td>';
-			echo '<td><span class="bli-badge bli-badge--' . esc_attr( $modifier ) . '">' . esc_html( $label ) . '</span></td>';
-			$reason = (string) ( $entry['reason'] ?? '' );
-			echo '<td>' . esc_html( '' !== $reason ? $reason : '—' ) . '</td>';
-			echo '<td>';
-
-			if ( ! empty( $entry['edit_url'] ) ) {
-				echo '<a href="' . esc_url( (string) $entry['edit_url'] ) . '">' . esc_html__( 'Edit product', 'bulk-list-import' ) . '</a>';
-			} elseif ( 'failed' === ( $entry['outcome'] ?? '' ) ) {
-				$retry = wp_nonce_url(
-					Admin_Page::url(
-						Admin_Page::SLUG,
-						'retry=' . rawurlencode( (string) ( $report['id'] ?? '' ) )
-						. '&line=' . (int) ( $entry['line'] ?? 0 )
-					),
-					'bli_retry'
-				);
-				echo '<a href="' . esc_url( $retry ) . '">' . esc_html__( 'Retry', 'bulk-list-import' ) . '</a>';
-			} else {
-				echo '—';
-			}
-
-			echo '</td></tr>';
+		foreach ( $rows as $row ) {
+			self::render_row( $import_id, $row );
 		}
 
 		echo '</tbody></table>';
 	}
 
 	/**
+	 * One report row.
+	 *
+	 * @param int                  $import_id Import id.
+	 * @param array<string, mixed> $row       Row record.
+	 */
+	private static function render_row( int $import_id, array $row ): void {
+		list( $label, $modifier ) = self::outcome_label( (string) ( $row['outcome'] ?? '' ) );
+
+		$name = (string) ( $row['name'] ?? '' );
+
+		if ( '' === $name ) {
+			$name = (string) ( $row['raw'] ?? '' );
+		}
+
+		$variant  = (string) ( $row['variant'] ?? '' );
+		$sku      = (string) ( $row['sku'] ?? '' );
+		$reason   = (string) ( $row['reason'] ?? '' );
+		$attempts = (int) ( $row['attempts'] ?? 0 );
+
+		echo '<tr>';
+		echo '<td>' . esc_html( (string) ( $row['line'] ?? '' ) ) . '</td>';
+		echo '<td>' . esc_html( $name );
+
+		if ( '' !== $variant ) {
+			echo ' <span class="bli-variant">' . esc_html( $variant ) . '</span>';
+		}
+
+		echo '</td>';
+		echo '<td>' . esc_html( '' !== $sku ? $sku : '—' ) . '</td>';
+		echo '<td><span class="bli-badge bli-badge--' . esc_attr( $modifier ) . '">' . esc_html( $label ) . '</span></td>';
+
+		// "Failed once, will retry" and "gave up after three" are different states,
+		// and a report that shows both as "Failed" is asking the user to guess.
+		echo '<td>' . esc_html( $attempts > 0 ? (string) $attempts : '—' ) . '</td>';
+
+		echo '<td>' . esc_html( '' !== $reason ? $reason : '—' ) . '</td>';
+		echo '<td>';
+
+		$product_id = (int) ( $row['product_id'] ?? 0 );
+
+		if ( $product_id > 0 ) {
+			$edit = get_edit_post_link( $product_id, 'raw' );
+
+			if ( $edit ) {
+				echo '<a href="' . esc_url( $edit ) . '">' . esc_html__( 'Edit product', 'bulk-list-import' ) . '</a>';
+			} else {
+				echo '—';
+			}
+		} elseif ( 'failed' === ( $row['outcome'] ?? '' ) ) {
+			$retry = wp_nonce_url(
+				Admin_Page::url( Admin_Page::SLUG, 'retry=' . $import_id . '&line=' . (int) ( $row['line'] ?? 0 ) ),
+				'bli_retry'
+			);
+			echo '<a href="' . esc_url( $retry ) . '">' . esc_html__( 'Retry', 'bulk-list-import' ) . '</a>';
+		} else {
+			echo '—';
+		}
+
+		echo '</td></tr>';
+	}
+
+	/**
 	 * Links to earlier reports.
 	 *
-	 * @param string $current ID of the report on screen.
+	 * @param array<int, array<string, mixed>> $recent  Recent imports.
+	 * @param int                              $current Currently shown import id.
 	 */
-	private static function render_history( string $current ): void {
-		$reports = self::all();
-
-		if ( count( $reports ) < 2 ) {
+	private static function render_history( array $recent, int $current ): void {
+		if ( count( $recent ) < 2 ) {
 			return;
 		}
 
 		echo '<h2>' . esc_html__( 'Earlier imports', 'bulk-list-import' ) . '</h2><ul class="bli-history">';
 
-		foreach ( $reports as $report ) {
-			$id     = (string) ( $report['id'] ?? '' );
-			$totals = (array) ( $report['totals'] ?? array() );
-			$label  = sprintf(
+		foreach ( $recent as $import ) {
+			$import_id = (int) $import['id'];
+			$totals    = Import_Store::totals( $import_id );
+
+			$label = sprintf(
 				/* translators: 1: date, 2: created count, 3: failed count. */
 				__( '%1$s — %2$d created, %3$d failed', 'bulk-list-import' ),
-				wp_date( 'j M Y, H:i', (int) ( $report['time'] ?? 0 ) ),
-				(int) ( $totals['created'] ?? 0 ),
-				(int) ( $totals['failed'] ?? 0 )
+				wp_date( 'j M Y, H:i', (int) strtotime( (string) $import['created_at'] . ' UTC' ) ),
+				$totals['created'],
+				$totals['failed']
 			);
 
 			echo '<li>';
-			if ( $id === $current ) {
+
+			if ( $import_id === $current ) {
 				echo '<strong>' . esc_html( $label ) . '</strong>';
 			} else {
-				$url = Admin_Page::url( Admin_Page::REPORT_SLUG, 'report=' . rawurlencode( $id ) );
-				echo '<a href="' . esc_url( $url ) . '">' . esc_html( $label ) . '</a>';
+				echo '<a href="' . esc_url( Admin_Page::url( Admin_Page::REPORT_SLUG, 'report=' . $import_id ) ) . '">'
+					. esc_html( $label ) . '</a>';
 			}
+
 			echo '</li>';
 		}
 
 		echo '</ul>';
-	}
-
-	/**
-	 * Neutralise a CSV cell that a spreadsheet would execute as a formula.
-	 *
-	 * Excel, LibreOffice and Google Sheets treat a cell beginning with =, +, -
-	 * or @ as a formula, and strip a leading tab or carriage return before
-	 * deciding. Every text column in this report carries whatever the user
-	 * pasted, so it can begin with any of them. A leading apostrophe tells all
-	 * three "the rest is literal text" and is not shown to the reader.
-	 *
-	 * @param string $value Raw cell value.
-	 */
-	private static function csv_cell( string $value ): string {
-		if ( '' !== $value && 1 === preg_match( '/^[=+\-@\t\r]/', $value ) ) {
-			return "'" . $value;
-		}
-
-		return $value;
 	}
 
 	/**
@@ -333,40 +292,60 @@ class Import_Report {
 			wp_die( esc_html__( 'CSV export is a Pro feature.', 'bulk-list-import' ) );
 		}
 
-		$id     = isset( $_GET['report'] ) && is_string( $_GET['report'] ) ? sanitize_text_field( wp_unslash( $_GET['report'] ) ) : '';
-		$report = self::get( $id );
+		$import_id = isset( $_GET['report'] ) ? absint( $_GET['report'] ) : 0;
+		$import    = $import_id > 0 ? Import_Store::get_import( $import_id ) : null;
 
-		if ( null === $report ) {
+		if ( null === $import ) {
 			wp_die( esc_html__( 'That import report no longer exists.', 'bulk-list-import' ) );
 		}
 
 		nocache_headers();
 		header( 'Content-Type: text/csv; charset=utf-8' );
-		// Filename comes from the stored report, never straight from the request.
-		$filename = sanitize_file_name( 'bulk-list-import-' . (string) $report['id'] . '.csv' );
-		header( 'Content-Disposition: attachment; filename=' . $filename );
+		header( 'Content-Disposition: attachment; filename=' . sanitize_file_name( 'bulk-list-import-' . $import_id . '.csv' ) );
 
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- WP_Filesystem cannot stream to php://output, which is the whole mechanism of a download.
 		$out = fopen( 'php://output', 'w' );
-		fputcsv( $out, array( 'Row', 'Product', 'Variant', 'SKU', 'Outcome', 'Reason', 'Raw line' ) );
 
-		foreach ( (array) $report['entries'] as $entry ) {
-			list( $label ) = self::outcome_label( (string) ( $entry['outcome'] ?? '' ) );
+		fputcsv( $out, array( 'Row', 'Product', 'Variant', 'SKU', 'Outcome', 'Tries', 'Reason', 'Raw line' ) );
+
+		foreach ( Import_Store::get_rows( $import_id ) as $row ) {
+			list( $label ) = self::outcome_label( (string) ( $row['outcome'] ?? '' ) );
+
 			fputcsv(
 				$out,
 				array(
-					self::csv_cell( (string) ( $entry['line'] ?? '' ) ),
-					self::csv_cell( (string) ( $entry['name'] ?? '' ) ),
-					self::csv_cell( (string) ( $entry['variant'] ?? '' ) ),
-					self::csv_cell( (string) ( $entry['sku'] ?? '' ) ),
+					self::csv_cell( (string) ( $row['line'] ?? '' ) ),
+					self::csv_cell( (string) ( $row['name'] ?? '' ) ),
+					self::csv_cell( (string) ( $row['variant'] ?? '' ) ),
+					self::csv_cell( (string) ( $row['sku'] ?? '' ) ),
 					self::csv_cell( $label ),
-					self::csv_cell( (string) ( $entry['reason'] ?? '' ) ),
-					self::csv_cell( (string) ( $entry['raw'] ?? '' ) ),
+					self::csv_cell( (string) ( $row['attempts'] ?? 0 ) ),
+					self::csv_cell( (string) ( $row['reason'] ?? '' ) ),
+					self::csv_cell( (string) ( $row['raw'] ?? '' ) ),
 				)
 			);
 		}
 
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- streaming a download to php://output; WP_Filesystem cannot stream.
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- pairs with the fopen above; WP_Filesystem has no streaming equivalent.
 		fclose( $out );
 		exit;
+	}
+
+	/**
+	 * Neutralise a CSV cell that a spreadsheet would treat as a formula.
+	 *
+	 * This export exists so a shop owner can hand the needs-attention list to
+	 * someone else, so the payload travels to a second person who has no reason to
+	 * distrust the file. A leading =, +, - or @ makes Excel and Sheets evaluate the
+	 * cell, and the content here came from a pasted product list.
+	 *
+	 * @param string $value Cell value.
+	 */
+	private static function csv_cell( string $value ): string {
+		if ( '' !== $value && str_contains( "=+-@\t\r", $value[0] ) ) {
+			return "'" . $value;
+		}
+
+		return $value;
 	}
 }

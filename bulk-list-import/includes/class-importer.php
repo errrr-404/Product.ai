@@ -35,9 +35,9 @@ class Importer {
 	 *
 	 * @param array<int, array<string, mixed>> $rows   Reviewed rows from the preview table.
 	 * @param string                           $prefix Optional SKU prefix override.
-	 * @return array<string, mixed> The persisted report.
+	 * @return int The id of the persisted report.
 	 */
-	public function import( array $rows, string $prefix = '' ): array {
+	public function import( array $rows, string $prefix = '' ): int {
 		// Pass 1 — plan. Rows rejected here never consume a SKU.
 		$plans  = array();
 		$needed = 0;
@@ -223,7 +223,6 @@ class Importer {
 		$entry               = $this->entry( $row, array() === $notices ? 'created' : 'created_verify', implode( '; ', $notices ) );
 		$entry['sku']        = $sku;
 		$entry['product_id'] = (int) $product_id;
-		$entry['edit_url']   = (string) get_edit_post_link( (int) $product_id, 'raw' );
 
 		return $entry;
 	}
@@ -328,7 +327,6 @@ class Importer {
 			'raw'        => (string) ( $row['raw'] ?? '' ),
 			'sku'        => '',
 			'product_id' => 0,
-			'edit_url'   => '',
 			'outcome'    => $outcome,
 			'reason'     => $reason,
 		);

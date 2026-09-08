@@ -98,6 +98,20 @@ function bli_is_pro(): bool {
 }
 
 /**
+ * Create the tables on activation.
+ *
+ * Also checked on every load via Schema::maybe_upgrade(), because activation
+ * hooks do not fire for a plugin restored from a backup or deployed by copying
+ * files — and a missing table is a fatal error rather than a degraded feature.
+ */
+register_activation_hook(
+	__FILE__,
+	static function (): void {
+		\BulkListImport\Schema::install();
+	}
+);
+
+/**
  * Declare HPOS (High-Performance Order Storage) compatibility.
  *
  * WordPress note: nothing runs unless it is hooked. add_action() registers a
@@ -141,6 +155,7 @@ add_action(
 			return;
 		}
 
+		\BulkListImport\Schema::maybe_upgrade();
 		\BulkListImport\Plugin::instance()->boot();
 	}
 );

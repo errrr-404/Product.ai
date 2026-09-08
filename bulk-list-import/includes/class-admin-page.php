@@ -166,16 +166,14 @@ class Admin_Page {
 		// A Retry link from the Import Report drops the failed line straight back
 		// into the box, so the user can correct it and re-run just that row.
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- nonce checked below when present.
-		if ( isset( $_GET['retry'], $_GET['line'] ) && is_string( $_GET['retry'] ) && check_admin_referer( 'bli_retry' ) ) {
-			$report = Import_Report::get( sanitize_text_field( wp_unslash( $_GET['retry'] ) ) );
-			$line   = absint( $_GET['line'] );
+		if ( isset( $_GET['retry'], $_GET['line'] ) && check_admin_referer( 'bli_retry' ) ) {
+			$import_id = absint( $_GET['retry'] );
+			$line      = absint( $_GET['line'] );
 
-			if ( null !== $report ) {
-				foreach ( (array) $report['entries'] as $entry ) {
-					if ( (int) ( $entry['line'] ?? 0 ) === $line ) {
-						$text = (string) ( $entry['raw'] ?? '' );
-						break;
-					}
+			foreach ( Import_Store::get_rows( $import_id ) as $entry ) {
+				if ( (int) ( $entry['line'] ?? 0 ) === $line ) {
+					$text = (string) ( $entry['raw'] ?? '' );
+					break;
 				}
 			}
 		}
@@ -678,11 +676,9 @@ class Admin_Page {
 			exit;
 		}
 
-		$report = ( new Importer() )->import( $rows, $prefix );
+		$import_id = ( new Importer() )->import( $rows, $prefix );
 
-		wp_safe_redirect(
-			self::url( self::REPORT_SLUG, 'report=' . rawurlencode( (string) $report['id'] ) )
-		);
+		wp_safe_redirect( self::url( self::REPORT_SLUG, 'report=' . $import_id ) );
 		exit;
 	}
 }
