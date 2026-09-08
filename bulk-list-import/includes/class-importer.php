@@ -18,16 +18,19 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Importer {
 
-	public const REVIEW_TAG = 'needs-review';
-
 	/**
 	 * Import a batch of reviewed rows.
 	 *
-	 * Runs in three passes:
+	 * Runs in four passes:
 	 *
 	 *   1. Plan every row, deciding which will attempt creation. No writes.
 	 *   2. Reserve exactly that many SKUs, under a lock held for milliseconds.
-	 *   3. Create products, unlocked, against the pre-assigned numbers.
+	 *   3. Record every row, so the report exists before any work is attempted.
+	 *   4. Dispatch the rows that need creating — to the queue, or inline.
+	 *
+	 * Pass 3 before pass 4 is the point. The report is written first so that a
+	 * process dying between them leaves a complete record of what was meant to
+	 * happen, rather than products with no report or a report with no rows.
 	 *
 	 * Every input row produces exactly one report entry. A row that vanishes
 	 * silently is the worst outcome in this plugin — the user believes they
@@ -51,7 +54,10 @@ class Importer {
 			}
 		}
 
-		// Pass 2 — reserve. Short locked transaction, released immediately.
+		// Pass 2 — reserve. Short locked transaction, released immediately. SKUs are
+		// claimed once, here, and each queued job carries its own: reserving inside a
+		// job would hold the sequence lock across AI generation, for minutes, blocking
+		// every other import on the site.
 		$reserved = array();
 
 		if ( $needed > 0 ) {
@@ -62,23 +68,81 @@ class Importer {
 			}
 		}
 
-		// Pass 3 — create, unlocked.
-		$entries = array();
-		$cursor  = 0;
+		// Pass 3 — record. Nothing has been created yet.
+		$import_id = Import_Store::create_import( count( $rows ) );
+		$queued    = array();
+		$cursor    = 0;
 
 		foreach ( $rows as $index => $row ) {
 			$plan = $plans[ $index ];
 
 			if ( 'create' !== $plan['action'] ) {
-				$entries[] = $this->entry( $row, $plan['outcome'], $plan['reason'] );
+				Import_Store::add_row( $import_id, $this->entry( $row, $plan['outcome'], $plan['reason'] ) );
 				continue;
 			}
 
-			$entries[] = $this->create_row( $row, $plan, $reserved[ $cursor ] );
+			$sku = $reserved[ $cursor ];
 			++$cursor;
+
+			$entry            = $this->entry( $row, 'pending', __( 'Queued.', 'bulk-list-import' ) );
+			$entry['sku']     = $sku;
+			$entry['payload'] = array(
+				'name'        => $plan['name'],
+				'variant'     => $plan['variant'],
+				'price'       => $plan['price'],
+				'notices'     => $plan['notices'],
+				'line'        => (int) ( $row['line'] ?? 0 ),
+				'raw'         => (string) ( $row['raw'] ?? '' ),
+				'gate_state'  => (string) ( $row['gate_state'] ?? '' ),
+				'gate_action' => (string) ( $row['gate_action'] ?? '' ),
+				'details'     => (array) ( $row['details'] ?? array() ),
+			);
+
+			$queued[] = Import_Store::add_row( $import_id, $entry );
 		}
 
-		return Import_Report::save( $entries );
+		Import_Store::prune();
+
+		// Pass 4 — dispatch.
+		$this->dispatch( $import_id, $queued );
+
+		return $import_id;
+	}
+
+	/**
+	 * Hand the queued rows to Action Scheduler, or run them here.
+	 *
+	 * The queue is skipped when there is no AI to wait for: a free-tier import is a
+	 * handful of CRUD writes that finish in well under a second, and sending the
+	 * user to a report full of "Waiting" for work already done would be worse than
+	 * useless. With generation on, every row goes to the queue — three to eight
+	 * seconds each is exactly the arithmetic that kills a single request.
+	 *
+	 * @param int             $import_id Import id.
+	 * @param array<int, int> $row_ids   Rows needing creation.
+	 */
+	private function dispatch( int $import_id, array $row_ids ): void {
+		if ( array() === $row_ids ) {
+			Import_Store::set_status( $import_id, 'complete' );
+
+			return;
+		}
+
+		if ( Queue::is_available() && \BulkListImport\AI\Recognition_Gate::is_available() ) {
+			Import_Store::set_status( $import_id, 'running' );
+
+			foreach ( $row_ids as $row_id ) {
+				Queue::enqueue( $row_id );
+			}
+
+			return;
+		}
+
+		foreach ( $row_ids as $row_id ) {
+			Row_Job::run( $row_id );
+		}
+
+		Import_Store::set_status( $import_id, 'complete' );
 	}
 
 	/**
@@ -143,91 +207,6 @@ class Importer {
 	}
 
 	/**
-	 * Create one product against its pre-assigned SKU.
-	 *
-	 * @param array<string, mixed> $row  Source row, for the report entry.
-	 * @param array<string, mixed> $plan Prepared payload from plan_row().
-	 * @param string               $sku  The SKU reserved for this row.
-	 * @return array<string, mixed> Report entry.
-	 */
-	private function create_row( array $row, array $plan, string $sku ): array {
-		// The reserved block protects against a collision with a concurrent
-		// import. It cannot protect against one that predates the batch — a
-		// product trashed and restored, or a SKU typed in by hand. Re-check, and
-		// fail this row rather than silently shifting the rest of the sequence.
-		if ( wc_get_product_id_by_sku( $sku ) > 0 ) {
-			/* translators: %s: SKU. */
-			return $this->entry( $row, 'failed', sprintf( __( 'SKU %s already in use', 'bulk-list-import' ), $sku ) );
-		}
-
-		global $wpdb;
-
-		// Per-row transaction: if the CRUD save fails halfway, this row leaves
-		// nothing half-written behind.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
-		$wpdb->query( 'START TRANSACTION' );
-
-		try {
-			$product = new \WC_Product_Simple();
-			$product->set_name( $plan['name'] );
-			$product->set_sku( $sku );
-			$product->set_status( 'draft' );          // Draft is the default, always.
-			$product->set_catalog_visibility( 'visible' );
-
-			if ( '' !== $plan['price'] ) {
-				$product->set_regular_price( (string) $plan['price'] );
-			}
-
-			if ( '' !== $plan['variant'] ) {
-				$product->set_attributes( array( $this->variant_attribute( $plan['variant'] ) ) );
-			}
-
-			$tag_id = $this->review_tag_id();
-
-			if ( $tag_id > 0 ) {
-				$product->set_tag_ids( array( $tag_id ) );
-			}
-
-			$product->update_meta_data( '_bli_source_line', (int) ( $row['line'] ?? 0 ) );
-			$product->update_meta_data( '_bli_raw_line', (string) ( $row['raw'] ?? '' ) );
-
-			if ( '' !== $plan['variant'] ) {
-				$product->update_meta_data( '_bli_variant', $plan['variant'] );
-			}
-
-			$product_id = (int) $product->save();
-		} catch ( \Throwable $e ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
-			$wpdb->query( 'ROLLBACK' );
-
-			return $this->entry(
-				$row,
-				'failed',
-				/* translators: %s: error message. */
-				sprintf( __( 'Could not save product: %s', 'bulk-list-import' ), $e->getMessage() )
-			);
-		}
-
-		if ( $product_id <= 0 ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
-			$wpdb->query( 'ROLLBACK' );
-
-			return $this->entry( $row, 'failed', __( 'WooCommerce did not return a product ID', 'bulk-list-import' ) );
-		}
-
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control, nothing to cache.
-		$wpdb->query( 'COMMIT' );
-
-		$notices = (array) $plan['notices'];
-
-		$entry               = $this->entry( $row, array() === $notices ? 'created' : 'created_verify', implode( '; ', $notices ) );
-		$entry['sku']        = $sku;
-		$entry['product_id'] = (int) $product_id;
-
-		return $entry;
-	}
-
-	/**
 	 * Report every row as failed because the SKU block could not be reserved.
 	 *
 	 * @param array<int, array<string, mixed>> $rows Input rows.
@@ -269,49 +248,6 @@ class Importer {
 	}
 
 	/**
-	 * Build the generic variant/spec attribute.
-	 *
-	 * Called "variant", never "size" — the same field holds 70cl, 256GB, UK 9
-	 * and "50kg bag".
-	 *
-	 * @param string $value Variant text.
-	 */
-	private function variant_attribute( string $value ): \WC_Product_Attribute {
-		/**
-		 * Filters the label shown for the parsed variant/spec attribute.
-		 *
-		 * @param string $label Attribute label.
-		 */
-		$label = (string) apply_filters( 'bli_variant_attribute_label', __( 'Variant', 'bulk-list-import' ) );
-
-		$attribute = new \WC_Product_Attribute();
-		$attribute->set_name( $label );
-		$attribute->set_options( array( $value ) );
-		$attribute->set_position( 0 );
-		$attribute->set_visible( true );
-		$attribute->set_variation( false );
-
-		return $attribute;
-	}
-
-	/**
-	 * Term ID of the needs-review product tag, creating it on first use.
-	 */
-	private function review_tag_id(): int {
-		$term = term_exists( self::REVIEW_TAG, 'product_tag' );
-
-		if ( ! $term ) {
-			$term = wp_insert_term( self::REVIEW_TAG, 'product_tag' );
-		}
-
-		if ( is_wp_error( $term ) || ! isset( $term['term_id'] ) ) {
-			return 0;
-		}
-
-		return (int) $term['term_id'];
-	}
-
-	/**
 	 * Build a report entry.
 	 *
 	 * @param array<string, mixed> $row     Source row.
@@ -329,6 +265,8 @@ class Importer {
 			'product_id' => 0,
 			'outcome'    => $outcome,
 			'reason'     => $reason,
+			'attempts'   => 0,
+			'payload'    => array(),
 		);
 	}
 }

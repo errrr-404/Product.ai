@@ -92,6 +92,10 @@ final class Plugin {
 		// Logged-in only. There is no nopriv twin, and there must not be: the
 		// preview parses arbitrary text and can spend the site's API quota.
 		add_action( 'wp_ajax_bli_preview', array( $this->admin_page, 'handle_preview' ) );
+
+		// The queue handler must be registered on every request, not just admin
+		// ones: Action Scheduler runs jobs from cron, where no admin screen loads.
+		Queue::register();
 		add_action( 'admin_post_bli_export_report', array( Import_Report::class, 'export_csv' ) );
 
 		add_filter( 'plugin_action_links_' . plugin_basename( BLI_FILE ), array( $this, 'action_links' ) );

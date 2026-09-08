@@ -176,6 +176,27 @@ final class Import_Store {
 	}
 
 	/**
+	 * One row, or null.
+	 *
+	 * @param int $row_id Row id.
+	 * @return array<string, mixed>|null
+	 */
+	public static function get_row( int $row_id ): ?array {
+		global $wpdb;
+
+		$table = Schema::rows_table();
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$row = $wpdb->get_row(
+			$wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", $row_id ),
+			ARRAY_A
+		);
+		// phpcs:enable
+
+		return is_array( $row ) ? $row : null;
+	}
+
+	/**
 	 * Every row of an import, in pasted order.
 	 *
 	 * Ordered by line, then id, because "every input row appears" is only useful

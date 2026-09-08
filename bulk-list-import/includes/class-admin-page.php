@@ -76,6 +76,13 @@ class Admin_Page {
 	private const GATE_ACTIONS = array( 'own', 'details', 'skip' );
 
 	/**
+	 * Gate states the preview may round-trip back to us.
+	 *
+	 * @var string[]
+	 */
+	private const GATE_STATES = array( 'ready', 'blocked', 'unchecked', 'unavailable' );
+
+	/**
 	 * Register menu entries.
 	 */
 	public function register_menu(): void {
@@ -368,6 +375,7 @@ class Admin_Page {
 			echo '<input type="hidden" name="' . esc_attr( $field ) . '[raw]" value="' . esc_attr( $row['raw'] ) . '" />';
 			echo '<input type="hidden" name="' . esc_attr( $field ) . '[flags]" value="' . esc_attr( implode( ',', $row['flags'] ) ) . '" />';
 			echo '<input type="hidden" name="' . esc_attr( $field ) . '[duplicate_of]" value="' . esc_attr( (string) ( $row['duplicate_of'] ?? 0 ) ) . '" />';
+			echo '<input type="hidden" name="' . esc_attr( $field ) . '[gate_state]" value="' . esc_attr( $state ) . '" />';
 			if ( 'heading' === $row['type'] ) {
 				echo '<input type="hidden" name="' . esc_attr( $field ) . '[name]" value="' . esc_attr( $row['name'] ) . '" />';
 			}
@@ -656,7 +664,11 @@ class Admin_Page {
 				}
 			}
 
+			$gate_state = isset( $item['gate_state'] ) ? sanitize_key( (string) $item['gate_state'] ) : '';
+			$gate_state = in_array( $gate_state, self::GATE_STATES, true ) ? $gate_state : '';
+
 			$rows[] = array(
+				'gate_state'   => $gate_state,
 				'gate_action'  => $action,
 				'details'      => $details,
 				'line'         => absint( $item['line'] ?? 0 ),

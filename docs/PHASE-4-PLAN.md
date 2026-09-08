@@ -81,7 +81,7 @@ in 4e before anything is generated for them. Non-candidate rows — headings,
 duplicates — carry no gate key at all rather than a default state, so nothing can
 mistake "never asked" for "passed".
 
-## 4e — Queued generation (pass 2)
+## 4e — Queued generation (pass 2) — done
 
 - Custom tables `{prefix}bli_imports` and `{prefix}bli_import_rows`, `dbDelta`
   gated behind a schema version option, uninstall hook dropping both.
@@ -98,6 +98,17 @@ mistake "never asked" for "passed".
   provider overrides the schedule.
 - Report rows gain an `attempts` column: "failed once, will retry" and "gave up
   after three" are different states and the user has to tell them apart.
+
+**Landed.** Two notes for whoever touches this next.
+
+Product creation lives in one place, `Product_Writer`, used by both the queued
+and the synchronous path. Two creation routines that drifted apart would be a
+slow, quiet bug: products imported with the queue off would gradually stop
+matching products imported with it on, and nothing would report a difference.
+
+`Row_Job::run()` is idempotent by outcome — it returns immediately unless the row
+is still `pending`. Action Scheduler can run an action twice after a timeout, and
+a second run must not create a second product against the same reserved SKU.
 
 ## 4f — Field-level uncertainty
 
